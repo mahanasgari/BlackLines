@@ -1,0 +1,1 @@
+"""VpnShopBot — Telegram shop + admin for 3x-ui VPN."""
