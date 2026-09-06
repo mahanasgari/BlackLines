@@ -1,0 +1,12 @@
+services:
+  vpn-shop-bot:
+    build: .
+    container_name: vpn_shop_bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    network_mode: host
+    volumes:
+      - /opt/3x-ui/vpn-bot-data:/opt/3x-ui/vpn-bot-data
+      - /opt/3x-ui/db:/opt/3x-ui/panel-db:ro
+    working_dir: /app
