@@ -372,6 +372,78 @@ def set_child_restrictions(
     return child
 
 
+def parental_pause_active(sub: Subscription, *, now: datetime | None = None) -> bool:
+    until = getattr(sub, "parental_pause_until", None)
+    if not until:
+        return False
+    when = now or datetime.utcnow()
+    if when.tzinfo is not None:
+        when = when.astimezone(timezone.utc).replace(tzinfo=None)
+    return until > when
+
+
+def set_child_pause_day(
+    session: Session,
+    *,
+    parent_sub: Subscription,
+    child_sub_id: int,
+    hours: int | None = None,
+    until: datetime | None = None,
+) -> Subscription:
+    """Freeze child VPN until a time without deleting the config."""
+    if not parental_enabled(session):
+        raise ValueError("parental_disabled")
+    group = (parent_sub.family_group or "").strip()
+    if not group:
+        raise ValueError("not_family")
+    if not is_family_parent(parent_sub):
+        raise ValueError("not_parent")
+    child = session.get(Subscription, child_sub_id)
+    if not child or child.family_group != group or child.user_id != parent_sub.user_id:
+        raise ValueError("child_not_found")
+    if child.id == parent_sub.id or is_family_parent(child):
+        raise ValueError("cannot_restrict_parent")
+    now = datetime.utcnow()
+    if until is not None:
+        pause_until = until
+        if pause_until.tzinfo is not None:
+            pause_until = pause_until.astimezone(timezone.utc).replace(tzinfo=None)
+    else:
+        h = int(hours or 24)
+        if h < 1 or h > 24 * 14:
+            raise ValueError("bad_pause_hours")
+        pause_until = now + timedelta(hours=h)
+    if pause_until <= now:
+        raise ValueError("pause_in_past")
+    child.family_role = "child"
+    child.parental_pause_until = pause_until
+    session.commit()
+    session.refresh(child)
+    return child
+
+
+def clear_child_pause_day(
+    session: Session,
+    *,
+    parent_sub: Subscription,
+    child_sub_id: int,
+) -> Subscription:
+    if not parental_enabled(session):
+        raise ValueError("parental_disabled")
+    group = (parent_sub.family_group or "").strip()
+    if not group:
+        raise ValueError("not_family")
+    if not is_family_parent(parent_sub):
+        raise ValueError("not_parent")
+    child = session.get(Subscription, child_sub_id)
+    if not child or child.family_group != group or child.user_id != parent_sub.user_id:
+        raise ValueError("child_not_found")
+    child.parental_pause_until = None
+    session.commit()
+    session.refresh(child)
+    return child
+
+
 def child_vpn_allowed_now(sub: Subscription, *, now: datetime | None = None) -> bool:
     """Whether a child config should be able to connect right now (allow-window)."""
     if not bool(getattr(sub, "enabled", True)):
@@ -383,6 +455,11 @@ def child_vpn_allowed_now(sub: Subscription, *, now: datetime | None = None) -> 
         when = when.astimezone(timezone.utc).replace(tzinfo=None)
     if sub.expires_at and sub.expires_at <= when:
         return False
+    if parental_pause_active(sub, now=when):
+        return False
+    throttled = getattr(sub, "abuse_throttled_until", None)
+    if throttled and throttled > when:
+        return False
     sched = parse_schedule(getattr(sub, "vpn_allow_schedule", None))
     if not sched:
         return True
@@ -390,7 +467,7 @@ def child_vpn_allowed_now(sub: Subscription, *, now: datetime | None = None) -> 
 
 
 def sync_vpn_allow_schedules(session: Session, panel) -> dict[str, Any]:
-    """Enable/disable child clients so VPN only works inside the parent-set window."""
+    """Enable/disable child clients for allow-window + pause-day."""
     rows = list(
         session.scalars(
             select(Subscription).where(Subscription.family_group.is_not(None))
@@ -399,6 +476,7 @@ def sync_vpn_allow_schedules(session: Session, panel) -> dict[str, Any]:
     changed = 0
     errors: list[str] = []
     checked = 0
+    now = datetime.utcnow()
     for sub in rows:
         if is_family_parent(sub):
             continue
@@ -407,19 +485,24 @@ def sync_vpn_allow_schedules(session: Session, panel) -> dict[str, Any]:
             continue
         has_sched = bool(parse_schedule(getattr(sub, "vpn_allow_schedule", None)))
         paused = bool(getattr(sub, "vpn_schedule_paused", False))
-        if not has_sched and not paused:
+        pause_day = parental_pause_active(sub, now=now)
+        until = getattr(sub, "parental_pause_until", None)
+        if until and not pause_day:
+            sub.parental_pause_until = None
+            until = None
+        if not has_sched and not paused and not pause_day and not until:
             continue
         checked += 1
-        want_on = child_vpn_allowed_now(sub)
+        want_on = child_vpn_allowed_now(sub, now=now)
         try:
             if want_on:
                 if paused:
                     panel.set_enabled(email, True)
                     sub.vpn_schedule_paused = False
                     changed += 1
-            elif has_sched:
+            elif has_sched or pause_day:
                 panel.set_enabled(email, False)
-                if bool(sub.enabled) and not paused:
+                if not paused:
                     sub.vpn_schedule_paused = True
                     changed += 1
             elif paused:
@@ -602,6 +685,8 @@ def family_seat_dict(sub: Subscription, stats: dict[str, Any] | None = None) -> 
     if not role:
         role = "parent" if int(getattr(sub, "family_index", 0) or 0) == 1 else "child"
     vpn_allowed = child_vpn_allowed_now(sub) if role != "parent" else True
+    pause_until = getattr(sub, "parental_pause_until", None)
+    pause_on = parental_pause_active(sub) if role != "parent" else False
     out = {
         "id": sub.id,
         "label": sub.label,
@@ -618,6 +703,8 @@ def family_seat_dict(sub: Subscription, stats: dict[str, Any] | None = None) -> 
         "vpn_schedule_label": schedule_label(vpn_sched),
         "vpn_allowed_now": vpn_allowed,
         "vpn_schedule_paused": bool(getattr(sub, "vpn_schedule_paused", False)),
+        "pause_until": pause_until.isoformat() if pause_until else None,
+        "pause_active": pause_on,
         "enabled": bool(sub.enabled),
     }
     if stats:

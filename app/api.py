@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, model_validator
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.channel_gate import (
@@ -291,6 +291,14 @@ class ParentalRestrictBody(BaseModel):
     categories: list[str] = Field(default_factory=list)
     schedule: dict | None = None
     vpn_schedule: dict | None = None
+
+
+class ParentalPauseBody(BaseModel):
+    hours: int = Field(default=24, ge=1, le=336)
+
+
+class AdminDutyBody(BaseModel):
+    on_duty: bool = True
 
 
 class RedeemGiftBody(BaseModel):
@@ -794,6 +802,7 @@ def create_app() -> FastAPI:
             "wallet_spendable": view["spendable"],
             "is_admin": is_user_admin(user, settings),
             "role": user.role or USER_ROLE_USER,
+            "on_duty": bool(getattr(user, "on_duty", False)) if is_user_admin(user, settings) else False,
             "shop_name": settings.shop_name,
             "payment": payment_info(db, settings),
             "has_birth_date": bool(user.birth_date),
@@ -1867,6 +1876,19 @@ def create_app() -> FastAPI:
                     ),
                 ],
             },
+            "abuse": {
+                "flag": getattr(sub, "abuse_flag", None),
+                "throttled_until": (
+                    sub.abuse_throttled_until.isoformat()
+                    if getattr(sub, "abuse_throttled_until", None)
+                    else None
+                ),
+                "notes": getattr(sub, "abuse_notes", None),
+                "active": bool(
+                    getattr(sub, "abuse_throttled_until", None)
+                    and sub.abuse_throttled_until > datetime.utcnow()
+                ),
+            },
             **stats,
         }
         if sub.family_group:
@@ -1985,6 +2007,59 @@ def create_app() -> FastAPI:
         sync = maybe_sync_parental_routing(db, state.panel)
         vpn_sync = sync_vpn_allow_schedules(db, state.panel)
         return {"ok": True, "child": family_seat_dict(child), "sync": sync, "vpn_sync": vpn_sync}
+
+    def _family_parental_error(exc: Exception) -> HTTPException:
+        messages = {
+            "parental_disabled": "محدودیت والدین غیرفعال است",
+            "not_family": "این کانفیگ پکیج خانواده نیست",
+            "not_parent": "فقط والد می‌تواند محدودیت بگذارد",
+            "child_not_found": "کانفیگ فرزند پیدا نشد",
+            "cannot_restrict_parent": "نمی‌توان روی کانفیگ والد محدودیت گذاشت",
+            "bad_pause_hours": "مدت توقف باید بین ۱ تا ۳۳۶ ساعت باشد",
+            "pause_in_past": "زمان پایان توقف نامعتبر است",
+        }
+        return HTTPException(400, messages.get(str(exc), str(exc)))
+
+    @app.post("/shop/api/subscriptions/{sub_id}/family/{child_id}/pause")
+    def family_pause_child(
+        sub_id: int,
+        child_id: int,
+        payload: Annotated[ParentalPauseBody, Body()],
+        user: User = Depends(current_user),
+        db: Session = Depends(get_db),
+    ):
+        from app.parental import family_seat_dict, set_child_pause_day, sync_vpn_allow_schedules
+
+        parent = get_user_subscription(db, user.id, sub_id)
+        if not parent:
+            raise HTTPException(404, "اشتراک پیدا نشد")
+        try:
+            child = set_child_pause_day(
+                db, parent_sub=parent, child_sub_id=child_id, hours=payload.hours
+            )
+        except ValueError as exc:
+            raise _family_parental_error(exc) from exc
+        vpn_sync = sync_vpn_allow_schedules(db, state.panel)
+        return {"ok": True, "child": family_seat_dict(child), "vpn_sync": vpn_sync}
+
+    @app.post("/shop/api/subscriptions/{sub_id}/family/{child_id}/resume")
+    def family_resume_child(
+        sub_id: int,
+        child_id: int,
+        user: User = Depends(current_user),
+        db: Session = Depends(get_db),
+    ):
+        from app.parental import clear_child_pause_day, family_seat_dict, sync_vpn_allow_schedules
+
+        parent = get_user_subscription(db, user.id, sub_id)
+        if not parent:
+            raise HTTPException(404, "اشتراک پیدا نشد")
+        try:
+            child = clear_child_pause_day(db, parent_sub=parent, child_sub_id=child_id)
+        except ValueError as exc:
+            raise _family_parental_error(exc) from exc
+        vpn_sync = sync_vpn_allow_schedules(db, state.panel)
+        return {"ok": True, "child": family_seat_dict(child), "vpn_sync": vpn_sync}
 
     @app.get("/shop/api/subscriptions/{sub_id}/family/{child_id}/activity")
     def family_child_activity(
@@ -2584,9 +2659,26 @@ def create_app() -> FastAPI:
         _tg_post("sendMessage", json_body={"chat_id": tg_id, "text": f"برداشت رد شد. {format_price(amount)} به کیف‌پول برگشت."})
         return {"ok": True}
 
-    def _notify_admins_new_chat(name: str, preview: str) -> None:
+    def _notify_admins_new_chat(name: str, preview: str, *, assignee_tg: int | None = None) -> None:
         body = f"💬 پیام جدید از {name}:\n{preview}"
-        for admin_id in settings.admin_ids:
+        targets: list[int] = []
+        if assignee_tg:
+            targets = [assignee_tg]
+        else:
+            try:
+                with state.session_factory() as s:
+                    duty_rows = list(
+                        s.scalars(
+                            select(User).where(User.role == USER_ROLE_ADMIN, User.on_duty.is_(True))
+                        ).all()
+                    )
+                    if duty_rows:
+                        targets = [int(u.telegram_id) for u in duty_rows if u.telegram_id]
+            except Exception:
+                logger.exception("duty admin lookup failed")
+            if not targets:
+                targets = list(settings.admin_ids)
+        for admin_id in targets:
             _notify_telegram(admin_id, body)
 
     def _chat_messages_payload(db: Session, user_id: int, after_id: int) -> dict:
@@ -2642,7 +2734,16 @@ def create_app() -> FastAPI:
         if len(preview) > 120:
             preview = preview[:117] + "…"
         name = user.full_name or user.username or str(user.telegram_id)
-        background_tasks.add_task(_notify_admins_new_chat, name, preview)
+        assignee_tg = None
+        try:
+            from app.services import get_chat_assignee
+
+            assignee = get_chat_assignee(db, user.id)
+            if assignee and assignee.telegram_id:
+                assignee_tg = int(assignee.telegram_id)
+        except Exception:
+            logger.exception("chat assignee lookup failed")
+        background_tasks.add_task(_notify_admins_new_chat, name, preview, assignee_tg=assignee_tg)
         return {"ok": True, "message": chat_message_dict(msg)}
 
     @app.get("/shop/api/chat/unread")
@@ -2659,7 +2760,62 @@ def create_app() -> FastAPI:
         return {
             "threads": list_chat_threads(db),
             "unread_total": admin_chat_unread_total(db),
+            "on_duty": bool(getattr(admin, "on_duty", False)),
+            "duty_count": db.scalar(
+                select(func.count()).select_from(User).where(User.role == USER_ROLE_ADMIN, User.on_duty.is_(True))
+            )
+            or 0,
         }
+
+    @app.post("/shop/api/admin/duty")
+    def admin_set_duty(
+        payload: Annotated[AdminDutyBody, Body()],
+        admin: User = Depends(require_admin),
+        db: Session = Depends(get_db),
+    ):
+        admin.on_duty = bool(payload.on_duty)
+        db.commit()
+        db.refresh(admin)
+        duty_count = (
+            db.scalar(
+                select(func.count()).select_from(User).where(User.role == USER_ROLE_ADMIN, User.on_duty.is_(True))
+            )
+            or 0
+        )
+        return {"ok": True, "on_duty": bool(admin.on_duty), "duty_count": int(duty_count)}
+
+    @app.post("/shop/api/admin/chat/threads/{user_id}/claim")
+    def admin_claim_chat(
+        user_id: int,
+        admin: User = Depends(require_admin),
+        db: Session = Depends(get_db),
+    ):
+        from app.services import claim_chat_thread
+
+        target = db.get(User, user_id)
+        if not target:
+            raise HTTPException(404, "کاربر پیدا نشد")
+        claim_chat_thread(db, user_id, admin.id)
+        return {
+            "ok": True,
+            "user_id": user_id,
+            "assigned_admin_id": admin.id,
+            "assigned_name": admin.full_name or admin.username or str(admin.telegram_id),
+        }
+
+    @app.post("/shop/api/admin/chat/threads/{user_id}/release")
+    def admin_release_chat(
+        user_id: int,
+        admin: User = Depends(require_admin),
+        db: Session = Depends(get_db),
+    ):
+        from app.services import release_chat_thread
+
+        target = db.get(User, user_id)
+        if not target:
+            raise HTTPException(404, "کاربر پیدا نشد")
+        release_chat_thread(db, user_id, admin_id=admin.id)
+        return {"ok": True, "user_id": user_id, "assigned_admin_id": None}
 
     @app.get("/shop/api/admin/chat/threads/{user_id}/messages")
     def admin_chat_messages(

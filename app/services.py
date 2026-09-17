@@ -5176,16 +5176,59 @@ def list_chat_threads(session: Session) -> list[dict]:
         .outerjoin(unread, User.id == unread.c.user_id)
         .order_by(last_msg.created_at.desc())
     ).all()
-    return [
-        {
-            "user_id": user.id,
-            "telegram_id": user.telegram_id,
-            "username": user.username,
-            "full_name": user.full_name,
-            "last_message": chat_preview_text(msg.body if msg else "", _parse_attachments_json(msg.attachments_json if msg else None)),
-            "last_message_at": msg.created_at.isoformat() if msg and msg.created_at else None,
-            "last_sender": msg.sender if msg else None,
-            "unread_count": int(unread_count or 0),
-        }
-        for user, msg, unread_count in rows
-    ]
+    out = []
+    for user, msg, unread_count in rows:
+        assignee = get_chat_assignee(session, user.id)
+        out.append(
+            {
+                "user_id": user.id,
+                "telegram_id": user.telegram_id,
+                "username": user.username,
+                "full_name": user.full_name,
+                "last_message": chat_preview_text(
+                    msg.body if msg else "",
+                    _parse_attachments_json(msg.attachments_json if msg else None),
+                ),
+                "last_message_at": msg.created_at.isoformat() if msg and msg.created_at else None,
+                "last_sender": msg.sender if msg else None,
+                "unread_count": int(unread_count or 0),
+                "assigned_admin_id": assignee.id if assignee else None,
+                "assigned_name": (
+                    (assignee.full_name or assignee.username or str(assignee.telegram_id))
+                    if assignee
+                    else None
+                ),
+            }
+        )
+    return out
+
+
+CHAT_ASSIGN_PREFIX = "chat_assignee:"
+
+
+def get_chat_assignee(session: Session, customer_user_id: int) -> User | None:
+    raw = get_setting(session, f"{CHAT_ASSIGN_PREFIX}{customer_user_id}", "").strip()
+    if not raw:
+        return None
+    try:
+        admin_id = int(raw)
+    except ValueError:
+        return None
+    admin = session.get(User, admin_id)
+    if not admin or (admin.role or "") != USER_ROLE_ADMIN:
+        return None
+    return admin
+
+
+def claim_chat_thread(session: Session, customer_user_id: int, admin_id: int) -> None:
+    set_setting(session, f"{CHAT_ASSIGN_PREFIX}{customer_user_id}", str(admin_id))
+
+
+def release_chat_thread(session: Session, customer_user_id: int, admin_id: int | None = None) -> None:
+    key = f"{CHAT_ASSIGN_PREFIX}{customer_user_id}"
+    if admin_id is not None:
+        current = get_setting(session, key, "").strip()
+        if current and current != str(admin_id):
+            # Another admin owns it — still allow release for simplicity of ops
+            pass
+    set_setting(session, key, "")

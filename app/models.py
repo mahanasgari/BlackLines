@@ -63,6 +63,8 @@ class User(Base):
     trial_granted: Mapped[bool] = mapped_column(Boolean, default=False)
     is_test: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     role: Mapped[str] = mapped_column(String(16), default="user", index=True)
+    # Admin support shift — only on-duty admins get new-chat pings
+    on_duty: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     orders: Mapped[list[Order]] = relationship(back_populates="user")
@@ -168,6 +170,13 @@ class Subscription(Base):
     # Child VPN may only connect during this window (Asia/Tehran); panel forced off outside it
     vpn_allow_schedule: Mapped[str | None] = mapped_column(String(256), nullable=True)
     vpn_schedule_paused: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Parent "pause day" — freeze child VPN until this UTC time (config kept)
+    parental_pause_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Abuse soft-throttle (multi-IP / traffic spike) — temporary panel disable
+    abuse_flag: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    abuse_throttled_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    abuse_notes: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    abuse_notified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     alert_expiry_3d_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     alert_expiry_1d_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # Soft-hide expired configs from the main dashboard list
@@ -458,6 +467,8 @@ def migrate_schema(engine) -> None:
                 conn.execute(text("ALTER TABLE users ADD COLUMN role VARCHAR(16) DEFAULT 'user'"))
             if "is_test" not in cols:
                 conn.execute(text("ALTER TABLE users ADD COLUMN is_test BOOLEAN DEFAULT 0"))
+            if "on_duty" not in cols:
+                conn.execute(text("ALTER TABLE users ADD COLUMN on_duty BOOLEAN DEFAULT 0"))
         order_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(orders)")).fetchall()}
         if order_cols and "wallet_used" not in order_cols:
             conn.execute(text("ALTER TABLE orders ADD COLUMN wallet_used INTEGER DEFAULT 0"))
@@ -512,6 +523,16 @@ def migrate_schema(engine) -> None:
             conn.execute(text("ALTER TABLE subscriptions ADD COLUMN vpn_allow_schedule VARCHAR(256)"))
         if sub_cols and "vpn_schedule_paused" not in sub_cols:
             conn.execute(text("ALTER TABLE subscriptions ADD COLUMN vpn_schedule_paused BOOLEAN DEFAULT 0"))
+        if sub_cols and "parental_pause_until" not in sub_cols:
+            conn.execute(text("ALTER TABLE subscriptions ADD COLUMN parental_pause_until DATETIME"))
+        if sub_cols and "abuse_flag" not in sub_cols:
+            conn.execute(text("ALTER TABLE subscriptions ADD COLUMN abuse_flag VARCHAR(32)"))
+        if sub_cols and "abuse_throttled_until" not in sub_cols:
+            conn.execute(text("ALTER TABLE subscriptions ADD COLUMN abuse_throttled_until DATETIME"))
+        if sub_cols and "abuse_notes" not in sub_cols:
+            conn.execute(text("ALTER TABLE subscriptions ADD COLUMN abuse_notes VARCHAR(256)"))
+        if sub_cols and "abuse_notified_at" not in sub_cols:
+            conn.execute(text("ALTER TABLE subscriptions ADD COLUMN abuse_notified_at DATETIME"))
         if sub_cols and "alert_expiry_3d_at" not in sub_cols:
             conn.execute(text("ALTER TABLE subscriptions ADD COLUMN alert_expiry_3d_at DATETIME"))
         if sub_cols and "alert_expiry_1d_at" not in sub_cols:

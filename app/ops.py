@@ -519,6 +519,7 @@ def transfer_subscription(
     sub.parental_schedule = None
     sub.vpn_allow_schedule = None
     sub.vpn_schedule_paused = False
+    sub.parental_pause_until = None
     session.commit()
     session.refresh(sub)
     record_audit(
@@ -562,6 +563,7 @@ def _apply_owner(sub: Subscription, target: User, *, detach_family: bool) -> Non
         sub.parental_schedule = None
         sub.vpn_allow_schedule = None
         sub.vpn_schedule_paused = False
+        sub.parental_pause_until = None
 
 
 def _sync_panel_owner(panel, emails: list[str], telegram_id: int | None) -> None:

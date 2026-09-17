@@ -389,6 +389,7 @@ export type Me = {
   wallet_spendable?: number;
   is_admin: boolean;
   role?: "user" | "admin";
+  on_duty?: boolean;
   shop_name: string;
   payment: PaymentInfo;
   has_birth_date?: boolean;
@@ -617,6 +618,8 @@ export type ChatThread = {
   last_message_at: string | null;
   last_sender: "user" | "admin" | null;
   unread_count: number;
+  assigned_admin_id?: number | null;
+  assigned_name?: string | null;
 };
 
 export type DashboardSummary = {
@@ -734,6 +737,8 @@ export type SubscriptionDetail = {
       vpn_schedule_label?: string | null;
       vpn_allowed_now?: boolean;
       vpn_schedule_paused?: boolean;
+      pause_until?: string | null;
+      pause_active?: boolean;
     }[];
     used_bytes?: number;
     used_label?: string;
@@ -790,6 +795,12 @@ export type SubscriptionDetail = {
   renew_status?: string | null;
   renew_status_label?: string | null;
   renew_amount_label?: string | null;
+  abuse?: {
+    flag: string | null;
+    throttled_until: string | null;
+    notes: string | null;
+    active: boolean;
+  };
 };
 
 export type RenewOrderResponse = {
@@ -1698,6 +1709,8 @@ export const api = {
         vpn_schedule_label?: string | null;
         vpn_allowed_now?: boolean;
         vpn_schedule_paused?: boolean;
+        pause_until?: string | null;
+        pause_active?: boolean;
       };
     }>(`/subscriptions/${parentSubId}/family/${childId}/restrict`, {
       method: "POST",
@@ -1706,6 +1719,38 @@ export const api = {
         schedule: schedule || null,
         vpn_schedule: vpnSchedule || null,
       }),
+    }),
+  pauseFamilyChild: (parentSubId: number, childId: number, hours = 24) =>
+    request<{
+      ok: boolean;
+      child: {
+        id: number;
+        pause_until?: string | null;
+        pause_active?: boolean;
+        vpn_allowed_now?: boolean;
+        vpn_schedule_paused?: boolean;
+        parental_categories?: string[];
+        restricted?: boolean;
+      };
+    }>(`/subscriptions/${parentSubId}/family/${childId}/pause`, {
+      method: "POST",
+      body: JSON.stringify({ hours }),
+    }),
+  resumeFamilyChild: (parentSubId: number, childId: number) =>
+    request<{
+      ok: boolean;
+      child: {
+        id: number;
+        pause_until?: string | null;
+        pause_active?: boolean;
+        vpn_allowed_now?: boolean;
+        vpn_schedule_paused?: boolean;
+        parental_categories?: string[];
+        restricted?: boolean;
+      };
+    }>(`/subscriptions/${parentSubId}/family/${childId}/resume`, {
+      method: "POST",
+      body: "{}",
     }),
   diagnoseSubscription: (subId: number) =>
     request<SubscriptionDiagnose>(`/subscriptions/${subId}/diagnose`, { method: "POST", body: "{}" }),
@@ -1871,7 +1916,29 @@ export const api = {
   chatUnread: () => request<{ unread_count: number }>("/chat/unread"),
   chatOrders: () => request<{ items: ChatOrderItem[] }>("/chat/orders"),
   adminChatThreads: () =>
-    request<{ threads: ChatThread[]; unread_total: number }>("/admin/chat/threads"),
+    request<{
+      threads: ChatThread[];
+      unread_total: number;
+      on_duty?: boolean;
+      duty_count?: number;
+    }>("/admin/chat/threads"),
+  adminSetDuty: (onDuty: boolean) =>
+    request<{ ok: boolean; on_duty: boolean; duty_count: number }>("/admin/duty", {
+      method: "POST",
+      body: JSON.stringify({ on_duty: onDuty }),
+    }),
+  adminClaimChat: (userId: number) =>
+    request<{
+      ok: boolean;
+      user_id: number;
+      assigned_admin_id: number;
+      assigned_name: string;
+    }>(`/admin/chat/threads/${userId}/claim`, { method: "POST", body: "{}" }),
+  adminReleaseChat: (userId: number) =>
+    request<{ ok: boolean; user_id: number; assigned_admin_id: null }>(
+      `/admin/chat/threads/${userId}/release`,
+      { method: "POST", body: "{}" },
+    ),
   adminChatMessages: (userId: number, after_id = 0, mark_read = false) =>
     request<{
       user: { id: number; telegram_id: number; username: string | null; full_name: string | null };

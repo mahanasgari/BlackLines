@@ -589,6 +589,11 @@ function AdminThreadList({
               {t.last_sender === "admin" ? "شما: " : ""}
               {t.last_message || "—"}
             </p>
+            {t.assigned_name ? (
+              <p className="mt-0.5 text-[10px] text-sky-300/80">مسئول: {t.assigned_name}</p>
+            ) : (
+              <p className="mt-0.5 text-[10px] text-neutral-600">بدون مسئول شیفت</p>
+            )}
           </div>
           {t.unread_count > 0 && (
             <span className="mt-1 flex size-5 shrink-0 items-center justify-center rounded-full bg-white text-[10px] font-bold text-black">
@@ -610,6 +615,7 @@ function AdminThreadChat({
   onNavigate,
   onOrderAction,
   orderRefreshRef,
+  onThreadMeta,
 }: {
   thread: ChatThread;
   active: boolean;
@@ -619,10 +625,12 @@ function AdminThreadChat({
   onNavigate?: (tab: "subs" | "shop" | "admin") => void;
   onOrderAction?: () => void;
   orderRefreshRef?: React.MutableRefObject<(() => void) | null>;
+  onThreadMeta?: (patch: Partial<ChatThread>) => void;
 }) {
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [claimBusy, setClaimBusy] = useState(false);
   const [orderLiveMap, setOrderLiveMap] = useState<Map<number, import("@/api").ChatOrderItem>>(new Map());
   const scrollRef = useRef<HTMLDivElement>(null);
   const lastIdRef = useRef(0);
@@ -765,10 +773,42 @@ function AdminThreadChat({
           >
             <ArrowRight className="size-5" />
           </button>
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <div className="truncate text-sm font-semibold">{threadTitle(thread)}</div>
-            <p className="text-[11px] text-neutral-400">{faNum(thread.telegram_id)}</p>
+            <p className="text-[11px] text-neutral-400">
+              {faNum(thread.telegram_id)}
+              {thread.assigned_name ? ` · مسئول: ${thread.assigned_name}` : ""}
+            </p>
           </div>
+          <button
+            type="button"
+            disabled={claimBusy}
+            onClick={() => {
+              void (async () => {
+                setClaimBusy(true);
+                try {
+                  if (thread.assigned_admin_id) {
+                    await api.adminReleaseChat(thread.user_id);
+                    onThreadMeta?.({ assigned_admin_id: null, assigned_name: null });
+                  } else {
+                    const res = await api.adminClaimChat(thread.user_id);
+                    onThreadMeta?.({
+                      assigned_admin_id: res.assigned_admin_id,
+                      assigned_name: res.assigned_name,
+                    });
+                  }
+                  haptic();
+                } catch {
+                  /* ignore */
+                } finally {
+                  setClaimBusy(false);
+                }
+              })();
+            }}
+            className="shrink-0 rounded-xl border border-white/15 bg-white/5 px-2.5 py-1.5 text-[11px] font-medium text-neutral-100 active:bg-white/10 disabled:opacity-50"
+          >
+            {thread.assigned_admin_id ? "آزاد کردن" : "قبول شیفت"}
+          </button>
         </div>
       </div>
 
@@ -826,6 +866,9 @@ export function ChatPanel({
   const [threads, setThreads] = useState<ChatThread[]>([]);
   const [loadingThreads, setLoadingThreads] = useState(isAdmin);
   const [activeThread, setActiveThread] = useState<ChatThread | null>(null);
+  const [onDuty, setOnDuty] = useState(false);
+  const [dutyCount, setDutyCount] = useState(0);
+  const [dutyBusy, setDutyBusy] = useState(false);
   const [detailAttachment, setDetailAttachment] = useState<AttachmentDetailTarget | null>(null);
   const inflightRef = useRef(false);
   const onUnreadRef = useRef(onUnreadChange);
@@ -848,6 +891,8 @@ export function ChatPanel({
     try {
       const data = await api.adminChatThreads();
       setThreads(data.threads);
+      setOnDuty(Boolean(data.on_duty));
+      setDutyCount(Number(data.duty_count || 0));
       onUnreadRef.current?.(data.unread_total);
     } finally {
       inflightRef.current = false;
@@ -943,6 +988,12 @@ export function ChatPanel({
           onNavigate={onNavigate}
           onOrderAction={handleOrderAction}
           orderRefreshRef={orderRefreshRef}
+          onThreadMeta={(patch) => {
+            setActiveThread((prev) => (prev ? { ...prev, ...patch } : prev));
+            setThreads((prev) =>
+              prev.map((t) => (t.user_id === activeThread.user_id ? { ...t, ...patch } : t)),
+            );
+          }}
         />
         <ChatAttachmentDetailSheet
           open={detailAttachment !== null}
@@ -964,9 +1015,38 @@ export function ChatPanel({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="shrink-0 border-b border-white/10 px-3 py-2">
-        <div className="flex items-center gap-1.5 text-xs font-semibold text-neutral-300">
-          <MessageCircle className="size-3.5 text-neutral-500" />
-          گفتگو با کاربران
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5 text-xs font-semibold text-neutral-300">
+            <MessageCircle className="size-3.5 text-neutral-500" />
+            گفتگو با کاربران
+          </div>
+          <button
+            type="button"
+            disabled={dutyBusy}
+            onClick={() => {
+              void (async () => {
+                setDutyBusy(true);
+                try {
+                  const res = await api.adminSetDuty(!onDuty);
+                  setOnDuty(res.on_duty);
+                  setDutyCount(res.duty_count);
+                  haptic();
+                } catch {
+                  /* ignore */
+                } finally {
+                  setDutyBusy(false);
+                }
+              })();
+            }}
+            className={cn(
+              "rounded-lg border px-2 py-1 text-[10px] font-medium disabled:opacity-50",
+              onDuty
+                ? "border-emerald-500/35 bg-emerald-500/15 text-emerald-100"
+                : "border-white/12 bg-white/5 text-neutral-300",
+            )}
+          >
+            {onDuty ? `آن‌دیوتی · ${faNum(dutyCount)}` : "شروع شیفت"}
+          </button>
         </div>
       </div>
       <AdminThreadList threads={threads} loading={loadingThreads && active} onSelect={setActiveThread} />

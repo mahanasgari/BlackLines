@@ -46,6 +46,7 @@ import { CheckoutPanel } from "@/components/checkout-panel";
 import { ChatPanel } from "@/components/chat-panel";
 import { cn, faNum, formatAmountInput, parseAmountInput } from "@/lib/utils";
 import { useTheme } from "@/lib/theme";
+import { CacheKeys, cacheClear, cacheGet, cacheSet } from "@/lib/offline-cache";
 import { GradientField } from "@/components/gradient-field";
 import { FilterBar } from "@/components/filter-bar";
 import { NotificationBell } from "@/components/motion/notification-bell";
@@ -338,6 +339,8 @@ export default function App() {
     ]);
     setPendingOrder(subs.pending || null);
     setWalletInfo(wallet);
+    cacheSet(CacheKeys.subscriptions, subs);
+    cacheSet(CacheKeys.wallet, wallet);
     setChatUnread(chatData.unread_count);
     setUserUnreadMessages(
       chatData.messages.filter((m) => m.sender === "admin" && !m.read_at),
@@ -348,6 +351,7 @@ export default function App() {
     setDashItems(dash.items || []);
     setDashArchived(dash.archived || []);
     setDashSummary(dash.summary || { total: 0, online: 0, offline: 0 });
+    cacheSet(CacheKeys.dashboard, dash);
   }, []);
 
   const refreshResellerDesk = useCallback(async () => {
@@ -459,6 +463,11 @@ export default function App() {
         );
         return;
       }
+      // Hydrate last-known me/plans so a flaky WebView still shows something
+      const cachedMe = cacheGet<Me>(CacheKeys.me);
+      const cachedPlans = cacheGet<Plan[]>(CacheKeys.plans);
+      if (cachedMe?.data) setMe(cachedMe.data);
+      if (cachedPlans?.data) setPlans(cachedPlans.data);
       const bootTimeoutMs = 20_000;
       const withTimeout = <T,>(p: Promise<T>, label: string) =>
         Promise.race([
@@ -476,12 +485,15 @@ export default function App() {
       ]);
       setMe(m);
       setPlans(p);
+      cacheSet(CacheKeys.me, m);
+      cacheSet(CacheKeys.plans, p);
       if (m.trial_account?.granted) {
         setTrialAccount(m.trial_account);
         setTrialOpen(true);
       }
     } catch (e) {
       if (e instanceof ApiError && e.code === "channel_required") {
+        cacheClear();
         setChannelGate({
           channel: e.channel || "Blackliness",
           inviteUrl: e.inviteUrl || "https://t.me/Blackliness",
@@ -489,7 +501,13 @@ export default function App() {
         });
         setError(null);
       } else {
-        setError(persianError(e instanceof Error ? e.message : "خطا در اتصال"));
+        const cachedMe = cacheGet<Me>(CacheKeys.me);
+        if (cachedMe?.data) {
+          setMe(cachedMe.data);
+          setError(null);
+        } else {
+          setError(persianError(e instanceof Error ? e.message : "خطا در اتصال"));
+        }
       }
     } finally {
       setLoading(false);
@@ -638,9 +656,14 @@ export default function App() {
       setTabLoading(true);
       try {
         if (tab === "subs") {
+          const cachedDash = cacheGet<Awaited<ReturnType<typeof api.dashboard>>>(CacheKeys.dashboard);
+          if (cachedDash?.data && !cancelled) {
+            applyDashboard(cachedDash.data);
+          }
           const [subsData, dash] = await Promise.all([api.subscriptions(), api.dashboard()]);
           if (!cancelled) {
             setPendingOrder(subsData.pending || null);
+            cacheSet(CacheKeys.subscriptions, subsData);
             applyDashboard(dash);
           }
         } else if (tab === "invite") {
@@ -1045,15 +1068,24 @@ export default function App() {
   const openWallet = async () => {
     haptic();
     setWalletOpen(true);
+    const cached = cacheGet<Awaited<ReturnType<typeof api.wallet>>>(CacheKeys.wallet);
+    if (cached?.data) {
+      setWalletInfo(cached.data);
+      setDepositAmount(cached.data.presets[1] || cached.data.min_deposit);
+      setWalletWithdrawAmount(cached.data.withdrawable ?? cached.data.balance);
+    }
     try {
       const info = await api.wallet();
       setWalletInfo(info);
+      cacheSet(CacheKeys.wallet, info);
       setDepositAmount(info.presets[1] || info.min_deposit);
       setWalletWithdrawAmount(info.withdrawable ?? info.balance);
       setWalletTab(info.pending_withdrawal ? "withdraw" : info.pending_deposit ? "deposit" : walletTab);
       if (me) setMe({ ...me, wallet_balance: info.balance });
     } catch (e) {
-      notify(persianError(e instanceof Error ? e.message : "خطا"), "error");
+      if (!cached?.data) {
+        notify(persianError(e instanceof Error ? e.message : "خطا"), "error");
+      }
     }
   };
 

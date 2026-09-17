@@ -501,6 +501,17 @@ export function SubscriptionDetailSheet({
               </span>
             </div>
 
+            {detail.abuse?.active ? (
+              <div className="mt-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-2.5 py-2 text-[11px] leading-relaxed text-amber-100">
+                محدودیت موقت فعال است
+                {detail.abuse.notes ? ` · ${detail.abuse.notes}` : ""}
+                {detail.abuse.throttled_until
+                  ? ` · تا ${formatDate(detail.abuse.throttled_until)}`
+                  : ""}
+                . کانفیگ حذف نشده؛ بعد از رفع مشکل خودکار وصل می‌شود.
+              </div>
+            ) : null}
+
             <div className="mt-2.5">
               <div className="mb-1 flex items-center justify-between text-[11px] text-neutral-400">
                 <span>ترافیک</span>

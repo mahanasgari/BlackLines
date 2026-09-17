@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Check, Clock, Download, Eye, Shield, ShieldOff, UserRound, Users } from "lucide-react";
+import { Check, Clock, Download, Eye, Pause, Play, Shield, ShieldOff, UserRound, Users } from "lucide-react";
 import { api, haptic, type SubscriptionDetail } from "@/api";
 import { TgButton } from "@/components/tg-button";
 import { TgSheet } from "@/components/tg-sheet";
@@ -72,6 +72,8 @@ function MemberCard({
   onSave,
   onClear,
   onOpenActivity,
+  onPause,
+  onResume,
   scheduleEnabled,
   scheduleStart,
   scheduleEnd,
@@ -97,6 +99,8 @@ function MemberCard({
   onSave: () => void;
   onClear: () => void;
   onOpenActivity?: () => void;
+  onPause?: (hours: number) => void;
+  onResume?: () => void;
   scheduleEnabled: boolean;
   scheduleStart: string;
   scheduleEnd: string;
@@ -186,6 +190,17 @@ function MemberCard({
                     : " · الان مجاز"}
                 </p>
               ) : null}
+              {member.pause_active || member.pause_until ? (
+                <p className="mt-1 inline-flex items-center gap-1 text-[10px] text-amber-200/90">
+                  <Pause className="size-3 shrink-0" />
+                  {member.pause_active
+                    ? "توقف موقت VPN فعال است"
+                    : "توقف زمان‌بندی‌شده"}
+                  {member.pause_until
+                    ? ` تا ${new Date(member.pause_until).toLocaleString("fa-IR")}`
+                    : ""}
+                </p>
+              ) : null}
               {member.schedule_label ? (
                 <p className="mt-1 text-[10px] text-amber-200/80">
                   ساعت مسدودی سایت: {member.schedule_label}
@@ -211,6 +226,33 @@ function MemberCard({
             >
               گزارش
             </button>
+            {member.pause_active ? (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  haptic();
+                  onResume?.();
+                }}
+                className="inline-flex items-center justify-center gap-1 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1.5 text-[11px] font-medium text-emerald-100 active:bg-emerald-500/20"
+              >
+                <Play className="size-3" />
+                ادامه
+              </button>
+            ) : (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  haptic();
+                  onPause?.(24);
+                }}
+                className="inline-flex items-center justify-center gap-1 rounded-xl border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-[11px] font-medium text-amber-100 active:bg-amber-500/20"
+              >
+                <Pause className="size-3" />
+                توقف ۱روز
+              </button>
+            )}
             <button
               type="button"
               onClick={onStartEdit}
@@ -428,6 +470,66 @@ export function FamilyParentalSection({
     }
   };
 
+  const pauseChild = async (childId: number, hours: number) => {
+    setBusy(true);
+    try {
+      const res = await api.pauseFamilyChild(detail.id, childId, hours);
+      onDetailChange({
+        ...detail,
+        family: {
+          ...family,
+          members: family.members.map((row) =>
+            row.id === childId
+              ? {
+                  ...row,
+                  pause_until: res.child.pause_until,
+                  pause_active: res.child.pause_active,
+                  vpn_allowed_now: res.child.vpn_allowed_now,
+                  vpn_schedule_paused: res.child.vpn_schedule_paused,
+                }
+              : row,
+          ),
+        },
+      });
+      haptic();
+      flash(`VPN فرزند برای ${faNum(hours)} ساعت متوقف شد`);
+    } catch (e) {
+      flash(e instanceof Error ? e.message : "خطا در توقف");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const resumeChild = async (childId: number) => {
+    setBusy(true);
+    try {
+      const res = await api.resumeFamilyChild(detail.id, childId);
+      onDetailChange({
+        ...detail,
+        family: {
+          ...family,
+          members: family.members.map((row) =>
+            row.id === childId
+              ? {
+                  ...row,
+                  pause_until: res.child.pause_until,
+                  pause_active: res.child.pause_active,
+                  vpn_allowed_now: res.child.vpn_allowed_now,
+                  vpn_schedule_paused: res.child.vpn_schedule_paused,
+                }
+              : row,
+          ),
+        },
+      });
+      haptic();
+      flash("VPN فرزند دوباره فعال شد");
+    } catch (e) {
+      flash(e instanceof Error ? e.message : "خطا در ادامه");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <section className="overflow-hidden rounded-2xl border border-white/10 bg-gradient-to-b from-white/[0.04] to-black/30">
       <div className="border-b border-white/8 px-3 py-3">
@@ -450,7 +552,7 @@ export function FamilyParentalSection({
             </div>
             <p className="mt-1 text-[11px] leading-relaxed text-neutral-400">
               {family.is_parent
-                ? "برای هر فرزند سایت‌ها را محدود کنید، ساعت مجاز VPN بگذارید، و گزارش بازدید را ببینید."
+                ? "برای هر فرزند سایت‌ها را محدود کنید، ساعت مجاز VPN بگذارید، توقف موقت بزنید، و گزارش بازدید را ببینید."
                 : "محدودیت‌ها و گزارش این کانفیگ فقط برای والد خانواده است."}
             </p>
           </div>
@@ -518,6 +620,8 @@ export function FamilyParentalSection({
             onSave={() => void save(m.id)}
             onClear={() => setEditCats([])}
             onOpenActivity={() => setActivityChild(m)}
+            onPause={(hours) => void pauseChild(m.id, hours)}
+            onResume={() => void resumeChild(m.id)}
           />
         ))}
 
