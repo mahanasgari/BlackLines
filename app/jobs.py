@@ -140,9 +140,11 @@ def check_usage_alerts(session: Session, panel, settings) -> dict[str, int]:
         label = (sub.label or "").strip() or (sub.plan.title if sub.plan else sub.xui_email)
         dirty = False
 
-        # Resume expired soft-throttles
+        # Resume soft-throttles: expired ones always; all of them when feature is off.
+        abuse_on = bool(getattr(settings, "abuse_throttle_enabled", False))
         throttled_until = getattr(sub, "abuse_throttled_until", None)
-        if throttled_until and throttled_until <= now:
+        should_resume = bool(throttled_until) and (not abuse_on or throttled_until <= now)
+        if should_resume:
             try:
                 if (
                     bool(sub.enabled)
@@ -150,19 +152,23 @@ def check_usage_alerts(session: Session, panel, settings) -> dict[str, int]:
                     and not getattr(sub, "vpn_schedule_paused", False)
                 ):
                     panel.set_enabled(sub.xui_email, True)
+                was_active = bool(throttled_until and throttled_until > now)
                 sub.abuse_flag = None
                 sub.abuse_throttled_until = None
                 sub.abuse_notes = None
+                if sub.alert_ip_over_at:
+                    sub.alert_ip_over_at = None
                 sent["abuse_resume"] += 1
                 dirty = True
-                _notify_telegram(
-                    settings,
-                    user.telegram_id,
-                    (
-                        f"✅ محدودیت موقت کانفیگ «{label}» برداشته شد.\n"
-                        "اگر دوباره چند دستگاه همزمان وصل شود، موقتاً قطع می‌شود."
-                    ),
-                )
+                if abuse_on and not was_active:
+                    _notify_telegram(
+                        settings,
+                        user.telegram_id,
+                        (
+                            f"✅ محدودیت موقت کانفیگ «{label}» برداشته شد.\n"
+                            "اگر دوباره چند دستگاه همزمان وصل شود، موقتاً قطع می‌شود."
+                        ),
+                    )
             except Exception:
                 logger.exception("abuse resume failed %s", sub.xui_email)
 
@@ -210,89 +216,90 @@ def check_usage_alerts(session: Session, panel, settings) -> dict[str, int]:
                 reset_subscription_alerts(sub)
                 dirty = True
 
-        try:
-            ip_info = client_connection_ips(panel, sub.xui_email)
-        except Exception:
-            ip_info = {"connected_ip_count": 0, "limit_ip": 0}
-        limit_ip = int(ip_info.get("limit_ip") or 0)
-        connected = int(ip_info.get("connected_ip_count") or 0)
+        # IP / spike soft-throttle — disabled until we have a less noisy signal.
+        if abuse_on:
+            try:
+                ip_info = client_connection_ips(panel, sub.xui_email)
+            except Exception:
+                ip_info = {"connected_ip_count": 0, "limit_ip": 0}
+            limit_ip = int(ip_info.get("limit_ip") or 0)
+            connected = int(ip_info.get("connected_ip_count") or 0)
 
-        # Traffic spike: >1.5GB in ~60 minutes vs last sample
-        spike = False
-        try:
-            from app.models import UsageSample
+            spike = False
+            try:
+                from app.models import UsageSample
 
-            older = session.scalar(
-                select(UsageSample)
-                .where(
-                    UsageSample.subscription_id == sub.id,
-                    UsageSample.recorded_at <= now - timedelta(minutes=45),
+                older = session.scalar(
+                    select(UsageSample)
+                    .where(
+                        UsageSample.subscription_id == sub.id,
+                        UsageSample.recorded_at <= now - timedelta(minutes=45),
+                    )
+                    .order_by(UsageSample.recorded_at.desc())
+                    .limit(1)
                 )
-                .order_by(UsageSample.recorded_at.desc())
-                .limit(1)
-            )
-            if older and used_now > 0:
-                delta = used_now - int(older.used_bytes or 0)
-                if delta >= int(1.5 * 1024**3):
-                    spike = True
-        except Exception:
-            logger.exception("traffic spike check failed %s", sub.xui_email)
+                if older and used_now > 0:
+                    delta = used_now - int(older.used_bytes or 0)
+                    if delta >= int(1.5 * 1024**3):
+                        spike = True
+            except Exception:
+                logger.exception("traffic spike check failed %s", sub.xui_email)
 
-        abuse_hit = (limit_ip > 0 and connected > limit_ip) or spike
-        if abuse_hit:
-            already = throttled_until and throttled_until > now
-            flag = "multi_ip" if (limit_ip > 0 and connected > limit_ip) else "traffic_spike"
-            note = (
-                f"IPs {connected}/{limit_ip}"
-                if flag == "multi_ip"
-                else "مصرف ناگهانی بالا"
-            )
-            should_notify = not sub.alert_ip_over_at or (now - sub.alert_ip_over_at) >= timedelta(hours=12)
-            if flag == "traffic_spike":
-                should_notify = not getattr(sub, "abuse_notified_at", None) or (
-                    now - sub.abuse_notified_at
-                ) >= timedelta(hours=6)
-            if not already:
-                try:
-                    panel.set_enabled(sub.xui_email, False)
-                    sub.abuse_flag = flag
-                    sub.abuse_throttled_until = now + timedelta(minutes=45)
-                    sub.abuse_notes = note
-                    sent["abuse_throttle"] += 1
-                    dirty = True
-                except Exception:
-                    logger.exception("abuse throttle failed %s", sub.xui_email)
-            if should_notify:
-                reason = (
-                    f"متصل: {connected} · سقف: {limit_ip}"
+            abuse_hit = (limit_ip > 0 and connected > limit_ip) or spike
+            if abuse_hit:
+                already = throttled_until and throttled_until > now
+                flag = "multi_ip" if (limit_ip > 0 and connected > limit_ip) else "traffic_spike"
+                note = (
+                    f"IPs {connected}/{limit_ip}"
                     if flag == "multi_ip"
-                    else "مصرف ترافیک در کمتر از یک ساعت خیلی بالا رفت"
+                    else "مصرف ناگهانی بالا"
                 )
-                _notify_telegram(
-                    settings,
-                    user.telegram_id,
-                    (
-                        f"🚨 محدودیت موقت روی «{label}»\n"
-                        f"{reason}\n"
-                        "کانفیگ حدود ۴۵ دقیقه قطع شد تا دستگاه اضافه جدا شود. "
-                        "بعداً خودکار وصل می‌شود."
-                    ),
-                )
-                if flag == "multi_ip":
-                    sub.alert_ip_over_at = now
-                    sent["ip_over"] += 1
-                else:
-                    sub.abuse_notified_at = now
-                dirty = True
-                for admin_id in getattr(settings, "admin_ids", []) or []:
+                should_notify = not sub.alert_ip_over_at or (now - sub.alert_ip_over_at) >= timedelta(hours=12)
+                if flag == "traffic_spike":
+                    should_notify = not getattr(sub, "abuse_notified_at", None) or (
+                        now - sub.abuse_notified_at
+                    ) >= timedelta(hours=6)
+                if not already:
+                    try:
+                        panel.set_enabled(sub.xui_email, False)
+                        sub.abuse_flag = flag
+                        sub.abuse_throttled_until = now + timedelta(minutes=45)
+                        sub.abuse_notes = note
+                        sent["abuse_throttle"] += 1
+                        dirty = True
+                    except Exception:
+                        logger.exception("abuse throttle failed %s", sub.xui_email)
+                if should_notify:
+                    reason = (
+                        f"متصل: {connected} · سقف: {limit_ip}"
+                        if flag == "multi_ip"
+                        else "مصرف ترافیک در کمتر از یک ساعت خیلی بالا رفت"
+                    )
                     _notify_telegram(
                         settings,
-                        admin_id,
-                        f"🛡 abuse/{flag} · {label} · user {user.telegram_id} · {note}",
+                        user.telegram_id,
+                        (
+                            f"🚨 محدودیت موقت روی «{label}»\n"
+                            f"{reason}\n"
+                            "کانفیگ حدود ۴۵ دقیقه قطع شد تا دستگاه اضافه جدا شود. "
+                            "بعداً خودکار وصل می‌شود."
+                        ),
                     )
-        elif limit_ip > 0 and connected <= limit_ip and sub.alert_ip_over_at:
-            sub.alert_ip_over_at = None
-            dirty = True
+                    if flag == "multi_ip":
+                        sub.alert_ip_over_at = now
+                        sent["ip_over"] += 1
+                    else:
+                        sub.abuse_notified_at = now
+                    dirty = True
+                    for admin_id in getattr(settings, "admin_ids", []) or []:
+                        _notify_telegram(
+                            settings,
+                            admin_id,
+                            f"🛡 abuse/{flag} · {label} · user {user.telegram_id} · {note}",
+                        )
+            elif limit_ip > 0 and connected <= limit_ip and sub.alert_ip_over_at:
+                sub.alert_ip_over_at = None
+                dirty = True
 
         if dirty:
             session.commit()

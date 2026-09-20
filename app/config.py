@@ -62,6 +62,10 @@ class Settings(BaseSettings):
     # Require Telegram channel membership before bot / miniapp use
     force_join_channel: bool = Field(default=True, alias="FORCE_JOIN_CHANNEL")
     required_channel: str = Field(default="@Blackliness", alias="REQUIRED_CHANNEL")
+    # Soft-disable VPN when panel reports multi-IP / traffic spike.
+    # Off by default: 3x-ui IP lists are sticky (carrier NAT, Wi‑Fi↔LTE, multi-node)
+    # and false-positive disconnects honest single-device users.
+    abuse_throttle_enabled: bool = Field(default=False, alias="ABUSE_THROTTLE_ENABLED")
 
     @field_validator("admin_ids", mode="before")
     @classmethod

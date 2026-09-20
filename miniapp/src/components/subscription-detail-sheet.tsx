@@ -3,6 +3,7 @@ import {
   ArrowRightLeft,
   Check,
   Copy,
+  ExternalLink,
   KeyRound,
   RefreshCw,
   ShieldOff,
@@ -26,6 +27,7 @@ import { TgButton } from "@/components/tg-button";
 import { TgSheet } from "@/components/tg-sheet";
 import { cn, faNum } from "@/lib/utils";
 import { OrbLoaderPanel } from "@/components/orb-loader";
+import { buildClientDeepLinks, openExternalUrl } from "@/lib/client-deeplinks";
 
 type DetailTab = "connect" | "usage" | "renew" | "more";
 
@@ -443,6 +445,16 @@ export function SubscriptionDetailSheet({
     );
   }, [detail]);
 
+  const deepLinks = useMemo(
+    () =>
+      buildClientDeepLinks({
+        subscriptionUrl: detail?.subscription_url,
+        shareLink: bestLink?.link,
+        name: detail?.label || detail?.plan_title || "BlackLines",
+      }),
+    [detail?.subscription_url, detail?.label, detail?.plan_title, bestLink?.link],
+  );
+
   return (
     <>
     <TgSheet
@@ -566,8 +578,8 @@ export function SubscriptionDetailSheet({
                     <p className="text-sm font-semibold text-emerald-100">اتصال سریع</p>
                     <p className="mt-1 text-[11px] leading-relaxed text-neutral-400">
                       {detail.subscription_url
-                        ? "لینک را کپی کنید و در V2rayNG / V2Box از بخش Subscription اضافه کنید."
-                        : "لینک کانفیگ را کپی کنید و در اپ کلاینت Paste کنید."}
+                        ? "با یک ضربه در Hiddify / v2rayNG باز کن، یا لینک را کپی کن."
+                        : "لینک کانفیگ را کپی کنید یا مستقیم در اپ کلاینت باز کنید."}
                     </p>
                     {detail.customer_name ? (
                       <p className="mt-2 rounded-lg border border-teal-500/20 bg-teal-500/10 px-2.5 py-1.5 text-[11px] leading-relaxed text-teal-100">
@@ -628,6 +640,35 @@ export function SubscriptionDetailSheet({
                 ) : (
                   <p className="text-[11px] text-neutral-500">لینکی برای این کانفیگ موجود نیست.</p>
                 )}
+
+                {deepLinks.length > 0 ? (
+                  <div className="space-y-2">
+                    <p className="text-[11px] font-medium text-neutral-300">باز کردن مستقیم در اپ</p>
+                    <div className="grid grid-cols-2 gap-2">
+                      {deepLinks.map((client) => (
+                        <button
+                          key={client.id}
+                          type="button"
+                          className="inline-flex h-11 flex-col items-center justify-center gap-0.5 rounded-xl border border-sky-500/25 bg-sky-500/10 px-2 text-sky-50 active:bg-sky-500/20"
+                          onClick={() => {
+                            haptic();
+                            const ok = openExternalUrl(client.href);
+                            if (ok) markCustomerLinkShared();
+                          }}
+                        >
+                          <span className="inline-flex items-center gap-1 text-[11px] font-semibold">
+                            <ExternalLink className="size-3 shrink-0" />
+                            {client.label}
+                          </span>
+                          <span className="text-[9px] font-normal text-sky-200/70">{client.hint}</span>
+                        </button>
+                      ))}
+                    </div>
+                    <p className="text-[10px] leading-relaxed text-neutral-500">
+                      اگر اپ نصب نباشد، چیزی باز نمی‌شود — اول Hiddify یا v2rayNG را نصب کن، بعد دوباره بزن.
+                    </p>
+                  </div>
+                ) : null}
 
                 <button
                   type="button"
