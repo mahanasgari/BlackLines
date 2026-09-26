@@ -50,11 +50,18 @@ String serverLabel(OutboundInfo o) {
       _ => o.tagDisplay.isEmpty ? o.tag : o.tagDisplay,
     };
   }
-  var s = (o.tagDisplay.isEmpty ? o.tag : o.tagDisplay).replaceAll(RegExp(r'\s*§.*$'), '').trim();
+  return _cleanTag(o.tagDisplay.isEmpty ? o.tag : o.tagDisplay);
+}
+
+String _cleanTag(String tag) {
+  var s = tag.replaceAll(RegExp(r'\s*§.*$'), '').trim();
   final dot = s.indexOf(' · ');
   if (dot > 0 && dot < s.length - 3) s = s.substring(dot + 3);
   return s;
 }
+
+/// The "§ n" position the core gives each server; stable while delays change.
+int _position(OutboundInfo o) => int.tryParse(RegExp(r'§\s*(\d+)').firstMatch(o.tag)?.group(1) ?? '') ?? 1 << 20;
 
 bool _visible(OutboundInfo o) => !o.tag.contains('§hide§');
 
@@ -147,8 +154,13 @@ class _ServersState extends ConsumerState<_Servers> {
 
   Widget _list(OutboundGroup g) {
     final items = g.items.where(_visible).toList();
-    // Automatic groups first, then the individual servers.
-    items.sort((a, b) => (b.isGroup ? 1 : 0) - (a.isGroup ? 1 : 0));
+    // Automatic groups first, then servers in subscription order — a fixed order so
+    // rows don't jump under the finger while ping results arrive.
+    items.sort((a, b) {
+      if (a.isGroup != b.isGroup) return a.isGroup ? -1 : 1;
+      if (a.isGroup) return a.tag.compareTo(b.tag);
+      return _position(a).compareTo(_position(b));
+    });
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -201,7 +213,7 @@ class _ServerRow extends StatelessWidget {
       _ => ('${faNum(delay)} ms', C.amber300),
     };
     final sub = info.isGroup
-        ? (info.groupSelectedTagDisplay.trim().isEmpty ? 'انتخاب خودکار' : 'فعلاً: ${info.groupSelectedTagDisplay.replaceAll(RegExp(r'\s*§.*$'), '').trim()}')
+        ? (info.groupSelectedTagDisplay.trim().isEmpty ? 'انتخاب خودکار' : 'فعلاً: ${_cleanTag(info.groupSelectedTagDisplay)}')
         : info.type;
     return Panel(
       onTap: onTap,
