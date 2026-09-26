@@ -399,6 +399,36 @@ class AdminAuditLog(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
 
 
+class AppSession(Base):
+    """Opaque Bearer token sessions for the native Flutter app."""
+
+    __tablename__ = "app_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    user_agent: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class AppLoginChallenge(Base):
+    """Pending bot deep-link login: Flutter polls until bot confirms app_<nonce>."""
+
+    __tablename__ = "app_login_challenges"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    nonce: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    session_id: Mapped[int | None] = mapped_column(ForeignKey("app_sessions.id"), nullable=True)
+    # Held until poll consumes the challenge (then cleared)
+    access_token_plain: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
 def make_engine(database_url: str):
     """Create engine; SQLite gets WAL + busy timeout so concurrent bot/API requests don't freeze."""
     is_sqlite = database_url.startswith("sqlite")
