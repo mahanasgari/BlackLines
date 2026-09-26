@@ -38,9 +38,11 @@ BlackLines-app/**/*.aab
 BlackLines-app/.idea/
 BlackLines-app/android/.gradle/
 BlackLines-app/android/local.properties
+# Downloaded engine binaries (make android-libs / ios-libs)
+BlackLines-app/ios/Frameworks/
 
 # Runtime data & logs
-data/
+/data/
 *.db
 *.sqlite
 *.sqlite3
