@@ -104,6 +104,13 @@ class HiddifyCoreService with InfraLogger {
         if (core.isSingleChannel()) {
           await startListeningLogs("bg", core.bgClient);
           await startListeningStatus("bg", core.bgClient);
+        } else if (await core.isActiveBg()) {
+          // The VPN kept running while the app was in the background (closeFront
+          // dropped our listeners): re-attach so the UI shows the real state
+          // instead of a stale "stopped".
+          await startListeningLogs("bg", core.bgClient);
+          await startListeningStatus("bg", core.bgClient);
+          return right(unit);
         }
         statusController.add(currentState);
         // ref.read(coreRestartSignalProvider.notifier).restart();
