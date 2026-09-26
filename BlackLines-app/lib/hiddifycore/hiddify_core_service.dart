@@ -464,14 +464,22 @@ class HiddifyCoreService with InfraLogger {
             statusController.add(currentState);
             return currentState;
           }),
-      // .endWith(const CoreStatus.stopped())
       onError: (error) {
         loggy.error("Stream error in ${key}StatusListener: $error");
-
-        // currentState = const CoreStatus.stopped();
-        // statusController.add(currentState);
-
-        // startListeningStatus(key, cc);
+        // Retry after bg gRPC comes up (common on cold start / service restart).
+        Future<void>.delayed(const Duration(milliseconds: 400), () async {
+          if (!core.isInitialized()) return;
+          if (subscriptions.containsKey("${key}StatusListener")) return;
+          if (key == "bg") {
+            for (var i = 0; i < 25; i++) {
+              if (await core.isActiveBg()) break;
+              await Future<void>.delayed(const Duration(milliseconds: 200));
+            }
+            if (!await core.isActiveBg()) return;
+          }
+          loggy.info("retrying ${key}StatusListener");
+          await startListeningStatus(key, cc);
+        });
       },
     );
   }
