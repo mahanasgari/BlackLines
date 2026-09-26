@@ -53,7 +53,9 @@ sealed class CoreStatus with _$CoreStatus {
           MessageType.ERROR_PARSING_CONFIG => CoreAlert.emptyConfiguration,
           MessageType.ERROR_BUILDING_CONFIG => CoreAlert.emptyConfiguration,
           MessageType.EMPTY_CONFIGURATION => CoreAlert.emptyConfiguration,
-          MessageType.ALREADY_STOPPED => CoreAlert.createService,
+          // Stopping a core that already stopped is not a failure (seen as a red
+          // flash while switching configs).
+          MessageType.ALREADY_STOPPED => null,
           MessageType.ALREADY_STARTED => CoreAlert.startService,
 
           // MessageType.REQUEST_VPN_PERMISSION => SingboxAlert.requestVPNPermission,
