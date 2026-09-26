@@ -187,12 +187,12 @@ flutter_gen:
     flutter_svg: true
 
 flutter_native_splash:
-  color: "#ffffff"
-  image: assets/images/source/ic_launcher_splash.png
+  color: "#050505"
+  image: assets/images/source/blacklines_splash.png
   android_gravity: center
   android_12:
-    color: "#ffffff"
-    image: assets/images/source/ic_launcher_foreground.png
+    color: "#050505"
+    image: assets/images/source/blacklines_splash_android12.png
 
 ffigen:
   name: "HiddifyCoreNativeLibrary"
