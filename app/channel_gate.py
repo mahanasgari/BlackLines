@@ -15,7 +15,13 @@ logger = logging.getLogger(__name__)
 
 _MEMBER_OK = frozenset({"creator", "administrator", "member", "restricted"})
 _cache: dict[int, tuple[bool, float]] = {}
-_CACHE_TTL_SEC = 45.0
+# Members are re-checked rarely; non-members soon (so joining unlocks quickly).
+_CACHE_TTL_MEMBER_SEC = 600.0
+_CACHE_TTL_NOT_MEMBER_SEC = 45.0
+# Telegram can be slow from the server: never hold a shop request for long.
+_TELEGRAM_TIMEOUT = httpx.Timeout(6.0, connect=4.0)
+# Last definite answer per user, kept past the TTL for network failures.
+_last_known: dict[int, bool] = {}
 
 
 def normalize_channel(raw: str | None) -> str:
@@ -83,7 +89,9 @@ def _cache_get(user_id: int) -> bool | None:
 
 
 def _cache_set(user_id: int, ok: bool) -> None:
-    _cache[user_id] = (ok, time.monotonic() + _CACHE_TTL_SEC)
+    ttl = _CACHE_TTL_MEMBER_SEC if ok else _CACHE_TTL_NOT_MEMBER_SEC
+    _cache[user_id] = (ok, time.monotonic() + ttl)
+    _last_known[user_id] = ok
 
 
 def clear_channel_cache(user_id: int | None = None) -> None:
@@ -107,9 +115,10 @@ def is_channel_member(settings: Settings, user_id: int, *, bypass_cache: bool = 
 
     chat_id = normalize_channel(settings.required_channel)
     last_error: str | None = None
+    network_failed = False
     for token in settings.all_bot_tokens:
         try:
-            with httpx.Client(timeout=15) as http:
+            with httpx.Client(timeout=_TELEGRAM_TIMEOUT) as http:
                 resp = http.get(
                     f"https://api.telegram.org/bot{token}/getChatMember",
                     params={"chat_id": chat_id, "user_id": user_id},
@@ -123,10 +132,22 @@ def is_channel_member(settings: Settings, user_id: int, *, bypass_cache: bool = 
             last_error = str(data.get("description") or resp.text or resp.status_code)
             # Bot may not be admin on this token — try the other bot.
             logger.warning("getChatMember failed chat=%s bot=…%s err=%s", chat_id, token[-6:], last_error)
+        except httpx.TransportError as exc:
+            # Telegram unreachable/slow: the same happens with every bot token, so stop here.
+            last_error = str(exc) or exc.__class__.__name__
+            network_failed = True
+            logger.warning("getChatMember network error chat=%s user=%s err=%s", chat_id, user_id, last_error)
+            break
         except Exception as exc:  # noqa: BLE001
             last_error = str(exc)
             logger.exception("getChatMember exception chat=%s user=%s", chat_id, user_id)
 
+    if network_failed:
+        # Don't lock people out because Telegram's API is unreachable: reuse the
+        # last definite answer, or let them in if we never got one. Re-check soon.
+        ok = _last_known.get(user_id, True)
+        _cache[user_id] = (ok, time.monotonic() + _CACHE_TTL_NOT_MEMBER_SEC)
+        return ok
     if last_error:
         logger.error("channel membership check failed user=%s err=%s", user_id, last_error)
     _cache_set(user_id, False)
