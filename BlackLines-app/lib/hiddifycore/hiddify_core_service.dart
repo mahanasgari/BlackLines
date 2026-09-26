@@ -99,11 +99,13 @@ class HiddifyCoreService with InfraLogger {
 
         await startListeningLogs("fg", core.fgClient);
         // await startListeningStatus("fg", core.fgClient);
-        if (!core.isSingleChannel()) {
+        // Mobile dual-channel: bg gRPC (17079) only exists after VPN service
+        // starts — do not attach bg log/status listeners during setup.
+        if (core.isSingleChannel()) {
           await startListeningLogs("bg", core.bgClient);
+          await startListeningStatus("bg", core.bgClient);
         }
         statusController.add(currentState);
-        await startListeningStatus("bg", core.bgClient);
         // ref.read(coreRestartSignalProvider.notifier).restart();
         return right(unit);
       } catch (e) {
@@ -433,9 +435,10 @@ class HiddifyCoreService with InfraLogger {
   // }
 
   Stream<CoreStatus> watchStatus() async* {
-    await startListeningStatus("bg", core.bgClient);
+    // Status is pushed by start()/stop() and by startListeningStatus once the
+    // background gRPC port is up. Do not attach the listener here — on mobile
+    // port 17079 does not exist until the VPN service starts.
     yield* statusController.stream;
-    // .endWith(const CoreStatus.stopped());
   }
 
   Future<void> startListeningStatus(String key, CoreClient cc) async {
