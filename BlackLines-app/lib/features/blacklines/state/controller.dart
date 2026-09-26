@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart' show AppLifecycleListener;
 import 'package:hiddify/features/blacklines/core/api.dart';
 import 'package:hiddify/features/blacklines/core/demo.dart';
 import 'package:hiddify/features/blacklines/core/format.dart';
@@ -98,7 +99,10 @@ class BLController extends ChangeNotifier {
             ),
     );
     unawaited(_init());
+    _lifecycle = AppLifecycleListener(onResume: syncIfStale);
   }
+
+  late final AppLifecycleListener _lifecycle;
 
   final BlackLinesAuthStore _auth;
   late final BLApi api;
@@ -183,8 +187,17 @@ class BLController extends ChangeNotifier {
   /// 'light' / 'dark', or null to follow the phone (theme.tsx default).
   String? themePref;
 
-  /// True when showing cached data because the server was unreachable.
+  /// True when showing cached data because the last sync with the server failed.
   bool offline = false;
+
+  /// True while a background sync with the server is running.
+  bool syncing = false;
+
+  /// When the data on screen was last confirmed by the server.
+  DateTime? lastSyncedAt;
+
+  Timer? _retry;
+  int _retryDelay = 0;
 
   Future<void> setThemePref(String? value) async {
     themePref = value;
@@ -209,6 +222,15 @@ class BLController extends ChangeNotifier {
     }
   }
 
+  /// Local cache for screens that keep their own data (chat threads…).
+  Object? readCache(String key) => _cached(key);
+  void writeCache(String key, Object? value) => _cache(key, value);
+
+  J? _cachedObj(String key) {
+    final v = _cached(key);
+    return v is Map ? J.from(v) : null;
+  }
+
   Future<void> _clearCache() async {
     for (final k in _prefs?.getKeys().where((k) => k.startsWith('bl_cache_')).toList() ?? const <String>[]) {
       await _prefs?.remove(k);
@@ -221,9 +243,12 @@ class BLController extends ChangeNotifier {
       themePref = _prefs!.getString('bl_theme');
     } catch (_) {}
     if (kBLDemo || await _auth.isLoggedIn) {
+      // Cache first: the app (and Connect) is usable right away; the server
+      // refresh runs in the background and updates the screens when it lands.
       auth = AuthPhase.loggedIn;
+      loading = !_restoreCache();
       notifyListeners();
-      await boot();
+      unawaited(boot());
     } else {
       _set(() {
         auth = (_prefs?.getBool('bl_guest') ?? false) ? AuthPhase.guest : AuthPhase.loggedOut;
@@ -276,6 +301,7 @@ class BLController extends ChangeNotifier {
         loginStatus = null;
         auth = AuthPhase.loggedIn;
         tab = BLTab.connect;
+        loading = true;
       });
       await boot();
     } catch (e) {
@@ -329,10 +355,20 @@ class BLController extends ChangeNotifier {
     await _auth.clear();
     await _clearCache();
     _chatPoll?.cancel();
+    _retry?.cancel();
     _set(() {
       auth = AuthPhase.loggedOut;
       me = null;
       offline = false;
+      error = null;
+      channelGate = null;
+      lastSyncedAt = null;
+      plans = const [];
+      adminOrders = const [];
+      adminWds = const [];
+      adminPaymentCards = const [];
+      chatUnread = 0;
+      userUnreadMessages = const [];
       dashItems = const [];
       dashArchived = const [];
       pendingOrder = null;
@@ -347,6 +383,7 @@ class BLController extends ChangeNotifier {
   }
 
   Future<void> _sessionExpired() async {
+    _retry?.cancel();
     await _auth.clear();
     await _clearCache();
     _set(() {
@@ -360,17 +397,21 @@ class BLController extends ChangeNotifier {
   // Boot (App.tsx boot / recheckChannel)
   // =========================================================================
 
+  /// Background sync: data already on screen stays usable while fresh data
+  /// loads; every section is saved locally as it arrives. Failures retry with
+  /// backoff and on app resume.
   Future<void> boot() async {
+    if (syncing) return;
+    _retry?.cancel();
     _set(() {
-      loading = true;
+      syncing = true;
       error = null;
-      channelGate = null;
     });
     try {
-      final results = await Future.wait([api.me(), api.plans()]).timeout(const Duration(seconds: 20));
+      final results = await Future.wait([api.me(), api.plans()]).timeout(const Duration(seconds: 45));
       me = results[0] as J;
       plans = results[1] as List<J>;
-      offline = false;
+      channelGate = null;
       _cache('me', me!.raw);
       _cache('plans', [for (final p in plans) p.raw]);
       final trial = me!.objOrNull('trial_account');
@@ -379,43 +420,88 @@ class BLController extends ChangeNotifier {
         pendingTrialSheet = trial;
       }
       loading = false;
+      offline = false;
+      _retryDelay = 0;
+      _markSynced();
       notifyListeners();
       _afterBoot();
     } on BLApiError catch (e) {
-      if (e.status == 401) return _sessionExpired();
+      if (e.status == 401) {
+        syncing = false;
+        return _sessionExpired();
+      }
       if (e.code == 'channel_required') {
         channelGate = (
           channel: e.channel ?? 'Blackliness',
           inviteUrl: e.inviteUrl ?? 'https://t.me/Blackliness',
           message: e.message,
         );
-      } else if (!_bootFromCache()) {
-        error = persianError(e);
+        loading = false;
+      } else {
+        _syncFailed(persianError(e));
       }
-      _set(() => loading = false);
     } on TimeoutException {
-      if (!_bootFromCache()) error = 'اتصال به سرور طولانی شد — دوباره تلاش کنید';
-      _set(() => loading = false);
+      _syncFailed('اتصال به سرور طولانی شد — دوباره تلاش می‌کنیم');
     } catch (e) {
-      if (!_bootFromCache()) error = persianError(e);
-      _set(() => loading = false);
+      _syncFailed(persianError(e));
+    } finally {
+      _set(() => syncing = false);
     }
   }
 
-  /// offline-cache.ts: a flaky network still shows the last known account.
-  bool _bootFromCache() {
-    final cachedMe = _cached('me');
-    if (cachedMe is! Map) return false;
-    me = J.from(cachedMe);
-    plans = J.list(_cached('plans'));
-    final dash = _cached('dash');
-    if (dash is Map) {
-      final d = J.from(dash);
-      dashItems = d.objs('items');
-      dashArchived = d.objs('archived');
-      dashSummary = d.objOrNull('summary') ?? dashSummary;
+  void _syncFailed(String message) {
+    // With cached data everything keeps working; without it only Connect does.
+    if (me != null) {
+      offline = true;
+    } else {
+      error = message;
     }
-    offline = true;
+    loading = false;
+    _retryDelay = (_retryDelay == 0 ? 10 : _retryDelay * 2).clamp(10, 120);
+    _retry = Timer(Duration(seconds: _retryDelay), () => unawaited(boot()));
+  }
+
+  /// Sync now when the last attempt failed (app resumed, user tapped retry…).
+  void syncIfStale() {
+    if (auth != AuthPhase.loggedIn || syncing) return;
+    if (offline || error != null || me == null) unawaited(boot());
+  }
+
+  void _markSynced() {
+    lastSyncedAt = DateTime.now();
+    _cache('synced_at', lastSyncedAt!.toIso8601String());
+  }
+
+  /// offline-cache.ts, extended: every section the app shows is restored instantly.
+  bool _restoreCache() {
+    final cachedMe = _cachedObj('me');
+    if (cachedMe == null) return false;
+    me = cachedMe;
+    plans = J.list(_cached('plans'));
+    final dash = _cachedObj('dash');
+    if (dash != null) {
+      dashItems = dash.objs('items');
+      dashArchived = dash.objs('archived');
+      dashSummary = dash.objOrNull('summary') ?? dashSummary;
+    }
+    pendingOrder = _cachedObj('pending');
+    walletInfo = _cachedObj('wallet');
+    refData = _cachedObj('ref');
+    proData = _cachedObj('pro');
+    resellerDesk = _cachedObj('reseller');
+    final notifs = _cachedObj('notifs');
+    if (notifs != null) {
+      chatUnread = notifs.i('unread');
+      userUnreadMessages = notifs.objs('messages');
+    }
+    final admin = _cachedObj('admin');
+    if (admin != null) {
+      adminOrders = admin.objs('orders');
+      adminWds = admin.objs('wds');
+      adminPaymentCards = admin.objs('cards');
+    }
+    final synced = _cached('synced_at');
+    lastSyncedAt = synced is String ? DateTime.tryParse(synced) : null;
     error = null;
     return true;
   }
@@ -519,12 +605,18 @@ class BLController extends ChangeNotifier {
 
   Future<void> _loadTab(BLTab id) async {
     if (id != BLTab.subs && id != BLTab.invite && !(id == BLTab.admin && isAdmin)) return;
-    _set(() => tabLoading = dashItems.isEmpty && id == BLTab.subs || id != BLTab.subs);
+    // Cached data stays on screen while it refreshes; only an empty tab shows a loader.
+    _set(() => tabLoading = switch (id) {
+          BLTab.subs => dashItems.isEmpty,
+          BLTab.invite => refData == null,
+          _ => adminOrders.isEmpty && adminWds.isEmpty,
+        });
     try {
       if (id == BLTab.subs) {
         await refreshDashboard();
       } else if (id == BLTab.invite) {
         refData = await api.referral();
+        _cache('ref', refData!.raw);
       } else {
         final r = await Future.wait([
           api.adminPending(includeTest: adminIncludeTest),
@@ -532,10 +624,11 @@ class BLController extends ChangeNotifier {
         ]);
         adminOrders = r[0];
         adminWds = r[1];
+        _cacheAdmin();
       }
     } catch (e) {
       if (e is BLApiError && e.status == 401) return _sessionExpired();
-      _err(e);
+      if (tabLoading) _err(e);
     } finally {
       _set(() => tabLoading = false);
     }
@@ -570,6 +663,7 @@ class BLController extends ChangeNotifier {
     dashSummary = dash.objOrNull('summary') ?? const J({'total': 0, 'online': 0, 'offline': 0});
     offline = false;
     _cache('dash', dash.raw);
+    _cache('pending', pendingOrder?.raw);
     notifyListeners();
   }
 
@@ -585,7 +679,14 @@ class BLController extends ChangeNotifier {
       adminWds = r[1];
       adminPaymentCards = r[2];
     });
+    _cacheAdmin();
   }
+
+  void _cacheAdmin() => _cache('admin', {
+        'orders': [for (final o in adminOrders) o.raw],
+        'wds': [for (final w in adminWds) w.raw],
+        'cards': [for (final c in adminPaymentCards) c.raw],
+      });
 
   Future<void> refreshUserNotifs() async {
     if (isAdmin) return;
@@ -597,12 +698,16 @@ class BLController extends ChangeNotifier {
       userUnreadMessages =
           r[2].objs('messages').where((m) => m.s('sender') == 'admin' && m['read_at'] == null).toList();
     });
+    _cache('pending', pendingOrder?.raw);
+    _cache('wallet', walletInfo?.raw);
+    _cache('notifs', {'unread': chatUnread, 'messages': [for (final m in userUnreadMessages) m.raw]});
   }
 
   Future<void> refreshResellerDesk() async {
     try {
       final d = await api.resellerDesk();
       _set(() => resellerDesk = d);
+      _cache('reseller', d.raw);
     } catch (_) {}
   }
 
@@ -613,6 +718,8 @@ class BLController extends ChangeNotifier {
         proData = d;
         me = me?.merge({'is_pro': d.b('is_pro'), 'pro_until': d['pro_until']});
       });
+      _cache('pro', d.raw);
+      _cache('me', me?.raw);
       return d;
     } catch (_) {
       return null;
@@ -651,6 +758,7 @@ class BLController extends ChangeNotifier {
     try {
       final m = await api.me();
       _set(() => me = m);
+      _cache('me', m.raw);
     } catch (_) {}
   }
 
@@ -998,6 +1106,8 @@ class BLController extends ChangeNotifier {
       walletInfo = info;
       me = me?.merge({'wallet_balance': info.i('balance')});
       notifyListeners();
+      _cache('wallet', info.raw);
+      _cache('me', me?.raw);
     } catch (e) {
       if (walletInfo == null) _err(e);
     }
@@ -1133,6 +1243,8 @@ class BLController extends ChangeNotifier {
   void dispose() {
     _loginPoll?.cancel();
     _chatPoll?.cancel();
+    _retry?.cancel();
+    _lifecycle.dispose();
     super.dispose();
   }
 }
