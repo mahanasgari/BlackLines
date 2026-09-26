@@ -142,12 +142,52 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     settings = _settings(context)
     referrer_code = None
+    app_login_nonce = None
     if context.args:
         raw = context.args[0].strip()
-        if raw.lower().startswith("ref_"):
+        if raw.lower().startswith("app_"):
+            app_login_nonce = raw[4:]
+        elif raw.lower().startswith("ref_"):
             referrer_code = raw[4:]
         else:
             referrer_code = raw
+
+    if app_login_nonce:
+        from app.app_auth import confirm_login_challenge, get_challenge_by_nonce
+
+        with _session(context) as session:
+            user, _is_new = get_or_create_user(
+                session,
+                update.effective_user.id,
+                update.effective_user.username,
+                update.effective_user.full_name,
+            )
+            challenge = get_challenge_by_nonce(session, app_login_nonce)
+            if challenge is None:
+                await update.message.reply_text(
+                    "لینک ورود نامعتبر است. از داخل اپ دوباره تلاش کنید.",
+                )
+                return
+            try:
+                confirm_login_challenge(session, challenge, user)
+            except ValueError as exc:
+                if str(exc) == "expired":
+                    await update.message.reply_text(
+                        "لینک ورود منقضی شده. از داخل اپ دوباره ورود را شروع کنید.",
+                    )
+                elif str(exc) == "already_consumed":
+                    await update.message.reply_text(
+                        "این لینک قبلاً استفاده شده. از داخل اپ دوباره ورود کنید.",
+                    )
+                else:
+                    await update.message.reply_text("ورود ناموفق بود. دوباره تلاش کنید.")
+                return
+            _audit(session, update, "app_login", detail=f"nonce={app_login_nonce[:12]}")
+        await update.message.reply_text(
+            "✅ ورود موفق — به اپ BlackLines برگردید.",
+        )
+        return
+
     with _session(context) as session:
         user, _is_new = get_or_create_user(
             session,
