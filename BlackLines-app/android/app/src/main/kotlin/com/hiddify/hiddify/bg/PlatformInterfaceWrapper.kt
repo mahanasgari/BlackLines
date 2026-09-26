@@ -147,10 +147,11 @@ interface PlatformInterfaceWrapper : PlatformInterface {
     override fun clearDNSCache() {
     }
 
+    // Called from Go over JNI: an exception here aborts the whole process.
     override fun readWIFIState(): WIFIState? {
         @Suppress("DEPRECATION")
         val wifiInfo =
-            Application.wifiManager.connectionInfo ?: return null
+            runCatching { Application.wifiManager.connectionInfo }.getOrNull() ?: return null
         var ssid = wifiInfo.ssid
         if (ssid == "<unknown ssid>") {
             return WIFIState("", "")
