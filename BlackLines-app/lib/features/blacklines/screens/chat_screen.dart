@@ -299,6 +299,12 @@ class _ConversationState extends ConsumerState<_Conversation> {
   bool get isAdmin => widget.thread != null;
   int get userId => widget.thread?.i('user_id') ?? 0;
   BLController get c => ref.read(blControllerProvider);
+  String get _cacheKey => isAdmin ? 'chat_$userId' : 'chat_me';
+
+  void _saveCache() {
+    final keep = messages.where((m) => m.i('id') > 0).toList();
+    c.writeCache(_cacheKey, [for (final m in keep.skip(keep.length > 200 ? keep.length - 200 : 0)) m.raw]);
+  }
 
   @override
   void initState() {
@@ -307,6 +313,14 @@ class _ConversationState extends ConsumerState<_Conversation> {
       c.api.adminChatMarkRead(userId).catchError((_) => const J({}));
     } else {
       c.api.chatMarkRead().catchError((_) => const J({}));
+    }
+    // Show the last saved conversation instantly; the poll below refreshes it.
+    final cached = J.list(c.readCache(_cacheKey));
+    if (cached.isNotEmpty) {
+      messages = cached;
+      _lastId = cached.last.i('id');
+      loading = false;
+      _toBottom(smooth: false);
     }
     _poll(initial: true);
     _refreshOrders();
@@ -350,15 +364,18 @@ class _ConversationState extends ConsumerState<_Conversation> {
         if (incoming.isNotEmpty) _lastId = incoming.last.i('id');
         error = null;
         _toBottom(smooth: false);
+        _saveCache();
       } else if (d.i('latest_id') > _lastId) {
         final wasNear = _nearBottom;
         messages = _merge(messages, incoming);
         if (messages.isNotEmpty) _lastId = messages.last.i('id');
         if (wasNear) _toBottom();
+        _saveCache();
       }
       if (mounted) setState(() {});
     } catch (e) {
-      if (initial && mounted) setState(() => error = persianError(e));
+      // Cached messages stay on screen; only an empty thread shows the error.
+      if (initial && mounted && messages.isEmpty) setState(() => error = persianError(e));
     } finally {
       _inflight = false;
       if (initial && mounted) setState(() => loading = false);
@@ -390,6 +407,7 @@ class _ConversationState extends ConsumerState<_Conversation> {
         messages = _merge(messages.where((m) => m.i('id') != tempId).toList(), [msg]);
         _lastId = msg.i('id');
       });
+      _saveCache();
     } catch (e) {
       setState(() => messages = messages.where((m) => m.i('id') != tempId).toList());
       notify(persianError(e), ToastStatus.error);
