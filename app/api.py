@@ -750,17 +750,26 @@ def create_app() -> FastAPI:
     @app.get("/shop/api/channel")
     def channel_status(
         x_telegram_init_data: Annotated[str | None, Header(alias="X-Telegram-Init-Data")] = None,
+        authorization: Annotated[str | None, Header()] = None,
+        db: Session = Depends(get_db),
     ):
         """Check channel membership without creating shop session side-effects beyond auth."""
         if not channel_gate_enabled(settings):
             return {"required": False, "member": True, "invite_url": None, "channel": None}
-        if not x_telegram_init_data:
-            raise HTTPException(401, "Telegram auth required")
-        try:
-            parsed = validate_webapp_init_data_any(x_telegram_init_data, settings.all_bot_tokens)
-        except TelegramAuthError as exc:
-            raise HTTPException(401, str(exc)) from exc
-        tg_id = int(parsed["user"]["id"])
+        if authorization and authorization.lower().startswith("bearer "):
+            # Native app (mini app embedded in the BlackLines app)
+            resolved = resolve_bearer(db, authorization)
+            if not resolved:
+                raise HTTPException(401, "Invalid or expired session")
+            tg_id = int(resolved[0].telegram_id)
+        else:
+            if not x_telegram_init_data:
+                raise HTTPException(401, "Telegram auth required")
+            try:
+                parsed = validate_webapp_init_data_any(x_telegram_init_data, settings.all_bot_tokens)
+            except TelegramAuthError as exc:
+                raise HTTPException(401, str(exc)) from exc
+            tg_id = int(parsed["user"]["id"])
         clear_channel_cache(tg_id)
         member = is_channel_member(settings, tg_id, bypass_cache=True)
         payload = channel_required_payload(settings)
