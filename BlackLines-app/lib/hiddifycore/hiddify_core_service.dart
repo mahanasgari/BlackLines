@@ -184,6 +184,8 @@ class HiddifyCoreService with InfraLogger {
                 ConnectionFailure.unexpected("failed to start core ${res.messageType} ${res.message}"),
           );
         }
+        // Ensure UI flips to Connected even if the gRPC status stream is late.
+        statusController.add(currentState = const CoreStatus.started());
       } on GrpcError catch (e) {
         loggy.error("failed to start bg core: $e");
         ref.read(coreRestartSignalProvider.notifier).restart();
