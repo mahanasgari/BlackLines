@@ -18,10 +18,12 @@ from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.channel_gate import (
-    channel_gate_enabled,
-    channel_required_payload,
-    is_channel_member,
+from app.app_auth import (
+    create_login_challenge,
+    poll_login_challenge,
+    resolve_bearer,
+    resolve_bot_username,
+    revoke_session,
 )
 from app.channel_gate import (
     channel_gate_enabled,
@@ -671,8 +673,22 @@ def create_app() -> FastAPI:
     def current_user(
         request: Request,
         x_telegram_init_data: Annotated[str | None, Header(alias="X-Telegram-Init-Data")] = None,
+        authorization: Annotated[str | None, Header()] = None,
         db: Session = Depends(get_db),
     ) -> User:
+        # Native app: Authorization Bearer <opaque session token>
+        if authorization and authorization.lower().startswith("bearer "):
+            resolved = resolve_bearer(db, authorization)
+            if not resolved:
+                raise HTTPException(401, "Invalid or expired session")
+            user, app_session = resolved
+            setattr(user, "_is_new_session", False)
+            request.state.actor = user
+            request.state.app_session = app_session
+            if channel_gate_enabled(settings) and not is_channel_member(settings, user.telegram_id):
+                raise HTTPException(status_code=403, detail=channel_required_payload(settings))
+            return user
+
         if not x_telegram_init_data:
             raise HTTPException(401, "Telegram auth required")
         try:
@@ -704,6 +720,32 @@ def create_app() -> FastAPI:
     @app.get("/shop/api/health")
     def health():
         return {"ok": True, "shop": settings.shop_name}
+
+    @app.post("/shop/api/auth/login/start")
+    def auth_login_start(db: Session = Depends(get_db)):
+        """Start Telegram bot deep-link login for the native app."""
+        challenge = create_login_challenge(db)
+        bot_username = resolve_bot_username(db, primary_bot_token=settings.primary_bot_token)
+        bot_url = f"https://t.me/{bot_username}?start=app_{challenge.nonce}"
+        return {
+            "nonce": challenge.nonce,
+            "bot_url": bot_url,
+            "expires_at": challenge.expires_at.isoformat() + "Z",
+        }
+
+    @app.get("/shop/api/auth/poll/{nonce}")
+    def auth_poll(nonce: str, db: Session = Depends(get_db)):
+        """Poll until the user confirms login via the Telegram bot deep-link."""
+        return poll_login_challenge(db, nonce.strip())
+
+    @app.post("/shop/api/auth/logout")
+    def auth_logout(request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)):
+        app_session = getattr(request.state, "app_session", None)
+        if app_session is None:
+            # Miniapp / initData sessions have nothing to revoke
+            return {"ok": True}
+        revoke_session(db, app_session)
+        return {"ok": True}
 
     @app.get("/shop/api/channel")
     def channel_status(
