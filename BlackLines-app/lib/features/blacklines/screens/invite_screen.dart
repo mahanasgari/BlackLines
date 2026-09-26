@@ -32,7 +32,7 @@ class _InviteScreenState extends ConsumerState<InviteScreen> {
   Widget build(BuildContext context) {
     final c = ref.watch(blControllerProvider);
     final r = c.refData;
-    if (c.tabLoading || r == null) {
+    if (r == null) {
       return ListView(padding: const EdgeInsets.all(12), children: const [Panel(child: OrbLoaderPanel())]);
     }
     final leaderboard = r.objs('leaderboard');
