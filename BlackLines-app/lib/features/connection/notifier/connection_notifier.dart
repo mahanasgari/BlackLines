@@ -125,14 +125,9 @@ class ConnectionNotifier extends _$ConnectionNotifier with AppLogger {
   final _singleStart = SingleCall();
 
   Future<void> _connect() async {
-    _singleStart.run(
-      () async {
-        await _connectThrottled();
-      },
-      onIgnored: () {
-        loggy.debug("connect called while another connect/disconnect is still running, ignoring");
-      },
-    );
+    await _singleStart.run(() async {
+      await _connectThrottled();
+    });
   }
 
   Future<void> _connectThrottled() async {
@@ -178,8 +173,10 @@ bool serviceRunning(Ref ref) {
 class SingleCall {
   bool _running = false;
 
-  Future<T> run<T>(Future<T> Function() task, {required T onIgnored}) async {
-    if (_running) return onIgnored;
+  Future<T?> run<T>(Future<T> Function() task, {T? onIgnored}) async {
+    if (_running) {
+      return onIgnored;
+    }
 
     _running = true;
     try {
