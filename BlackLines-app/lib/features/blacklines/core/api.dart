@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:hiddify/features/blacklines/core/json.dart';
 
 /// Mirrors `ApiError` in miniapp/src/api.ts.
@@ -66,9 +67,12 @@ class BLHttpTransport implements BLTransport {
     final opts = await _opts(timeout: isUpload ? const Duration(seconds: 45) : null);
     opts.method = method;
     late Response<dynamic> res;
+    final sw = Stopwatch()..start();
     try {
       res = await _dio.request<dynamic>('$apiBase/shop/api$path', data: body, options: opts);
+      if (kDebugMode) debugPrint('[BLApi] $method $path -> ${res.statusCode} in ${sw.elapsedMilliseconds}ms');
     } on DioException catch (e) {
+      if (kDebugMode) debugPrint('[BLApi] $method $path -> ${e.type.name} after ${sw.elapsedMilliseconds}ms');
       if (e.type == DioExceptionType.sendTimeout || e.type == DioExceptionType.receiveTimeout) {
         throw BLApiError(
           isUpload ? 'آپلود طولانی شد — اگر فیلترشکن روشن است خاموش کنید و دوباره بفرستید' : 'اتصال به سرور طولانی شد — دوباره تلاش کنید',
