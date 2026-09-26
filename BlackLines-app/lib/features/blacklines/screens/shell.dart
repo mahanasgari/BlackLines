@@ -61,15 +61,21 @@ class BLShell extends ConsumerWidget {
   Widget _body(BuildContext context, BLController c) {
     if (c.auth == AuthPhase.unknown) return const _Centered(child: OrbLoader());
     if (c.auth == AuthPhase.loggedOut) return const LoginScreen();
-    if (c.auth == AuthPhase.guest) return _Main(c: c);
-    if (c.loading) {
-      return _Centered(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [const OrbLoader(), const Gap(12), Text('در حال آماده‌سازی…', style: t(14, c: C.n400))],
-        ),
-      );
-    }
+    // Signed in or guest: the shell (and Connect) is always usable; account
+    // sections show their own loading/offline state while the server syncs.
+    return _Main(c: c);
+  }
+}
+
+/// Account tabs before the first sync lands (no cache yet), or when the server
+/// requires channel membership. Connect never goes through this.
+class _AccountGate extends StatelessWidget {
+  const _AccountGate({required this.c});
+
+  final BLController c;
+
+  @override
+  Widget build(BuildContext context) {
     if (c.channelGate case final gate?) {
       return _Centered(
         child: Panel(
@@ -100,17 +106,21 @@ class BLShell extends ConsumerWidget {
         ),
       );
     }
-    if (c.error case final err?) {
+    if (c.error case final err? when !c.syncing) {
       return _Centered(
         child: Panel(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text('ورود ممکن نشد', style: t(16, w: 600)),
+              Text('دریافت اطلاعات حساب ممکن نشد', style: t(16, w: 600)),
               const Gap(8),
               Text(err, style: t(14, c: C.n300, h: 1.7)),
+              const Gap(6),
+              Text('خودکار دوباره تلاش می‌کنیم. تا آن موقع از «اتصال» استفاده کنید.', style: t(12, c: C.n500, h: 1.6)),
               const Gap(12),
               TgButton(label: 'تلاش دوباره', onPressed: c.boot),
+              const Gap(8),
+              TgButton(label: 'رفتن به اتصال', variant: BtnVariant.outline, onPressed: () => c.switchTab(BLTab.connect)),
               const Gap(8),
               TgButton(label: 'خروج از حساب', variant: BtnVariant.ghost, onPressed: c.logout),
             ],
@@ -118,7 +128,18 @@ class BLShell extends ConsumerWidget {
         ),
       );
     }
-    return _Main(c: c);
+    return _Centered(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const OrbLoader(),
+          const Gap(12),
+          Text('در حال دریافت اطلاعات حساب…', style: t(14, c: C.n400)),
+          const Gap(6),
+          Text('می‌توانید همین حالا از تب «اتصال» وصل شوید', style: t(12, c: C.n500)),
+        ],
+      ),
+    );
   }
 }
 
@@ -159,24 +180,7 @@ class _Main extends StatelessWidget {
       child: Column(
         children: [
           _Header(c: c, showShopBar: showShopBar),
-          if (c.offline)
-            Material(
-              color: C.a(C.amber500, 0.12),
-              child: InkWell(
-                onTap: c.busy ? null : c.boot,
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  child: Row(
-                    children: [
-                      Icon(Icons.cloud_off_rounded, size: 16, color: C.amber200),
-                      const Gap(8),
-                      Expanded(child: Text('آفلاین — آخرین اطلاعات ذخیره‌شده نمایش داده می‌شود', style: t(11, c: C.amber200))),
-                      Text('تلاش دوباره', style: t(11, w: 600, c: C.amber200)),
-                    ],
-                  ),
-                ),
-              ),
-            ),
+          if (c.auth == AuthPhase.loggedIn) _SyncStatus(c: c),
           Expanded(
             child: Stack(
               children: [
@@ -195,6 +199,8 @@ class _Main extends StatelessWidget {
   Widget _tabBody(BuildContext context) {
     // Signed out ("continue without account"): only Connect works.
     if (c.auth == AuthPhase.guest && c.tab != BLTab.connect) return _GuestGate(c: c);
+    // Account tabs wait for the first sync (or channel check); Connect never does.
+    if (c.tab != BLTab.connect && (c.channelGate != null || c.me == null)) return _AccountGate(c: c);
     return switch (c.tab) {
       BLTab.connect => const ConnectScreen(),
       BLTab.subs => const DashboardScreen(),
@@ -204,6 +210,46 @@ class _Main extends StatelessWidget {
       BLTab.profile => const ProfileScreen(),
       BLTab.admin => const AdminScreen(),
     };
+  }
+}
+
+/// Thin progress line while syncing; amber banner when the last sync failed.
+class _SyncStatus extends StatelessWidget {
+  const _SyncStatus({required this.c});
+
+  final BLController c;
+
+  @override
+  Widget build(BuildContext context) {
+    if (c.offline) {
+      final when = relativeFa(c.lastSyncedAt);
+      return Material(
+        color: C.a(C.amber500, 0.12),
+        child: InkWell(
+          onTap: c.syncing ? null : c.boot,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            child: Row(
+              children: [
+                Icon(Icons.cloud_off_rounded, size: 16, color: C.amber200),
+                const Gap(8),
+                Expanded(
+                  child: Text(
+                    when.isEmpty ? 'آفلاین — اطلاعات ذخیره‌شده نمایش داده می‌شود' : 'آفلاین — آخرین به‌روزرسانی: $when',
+                    style: t(11, c: C.amber200),
+                  ),
+                ),
+                Text(c.syncing ? 'در حال تلاش…' : 'تلاش دوباره', style: t(11, w: 600, c: C.amber200)),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+    if (c.syncing && c.me != null) {
+      return LinearProgressIndicator(minHeight: 2, backgroundColor: Colors.transparent, color: C.w(40));
+    }
+    return const SizedBox.shrink();
   }
 }
 
