@@ -137,11 +137,12 @@ class _PowerButton extends StatefulWidget {
 }
 
 class _PowerButtonState extends State<_PowerButton> with SingleTickerProviderStateMixin {
-  late final AnimationController _spin = AnimationController(vsync: this, duration: const Duration(milliseconds: 1100));
+  late final AnimationController _spin;
 
   @override
   void initState() {
     super.initState();
+    _spin = AnimationController(vsync: this, duration: const Duration(milliseconds: 1100));
     if (widget.busy) _spin.repeat();
   }
 
