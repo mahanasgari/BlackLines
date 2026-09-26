@@ -72,6 +72,18 @@ In [@BotFather](https://t.me/BotFather):
 
 Open the bot and tap **🚀 باز کردن فروشگاه**.
 
+## Native app auth (Bearer sessions)
+
+For the Android BlackLines client (Hiddify fork).
+
+- `POST /shop/api/auth/login/start` → `{ nonce, bot_url, expires_at }`
+- User opens `t.me/<bot>?start=app_<nonce>`; bot confirms
+- `GET /shop/api/auth/poll/{nonce}` → `{ status, access_token?, expires_at? }`
+- `POST /shop/api/auth/logout` (Bearer)
+- Shop routes accept `Authorization: Bearer …` **or** `X-Telegram-Init-Data`
+
+See `app/app_auth.py` and [`BlackLines-app/README_BLACKLINES.md`](BlackLines-app/README_BLACKLINES.md).
+
 
 - Each user gets a unique invite link (`/start ref_CODE`)
 - Default commission: **15%** of purchase (wallet credit)

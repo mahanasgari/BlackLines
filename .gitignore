@@ -19,6 +19,26 @@ miniapp/node_modules/
 miniapp/dist/
 *.tsbuildinfo
 
+# Flutter client (legacy shell — prefer BlackLines-app)
+client/.dart_tool/
+client/.packages
+client/build/
+client/.flutter-plugins
+client/.flutter-plugins-dependencies
+client/*.apk
+client/*.aab
+
+# Hiddify fork build artifacts
+BlackLines-app/.dart_tool/
+BlackLines-app/build/
+BlackLines-app/.flutter-plugins
+BlackLines-app/.flutter-plugins-dependencies
+BlackLines-app/**/*.apk
+BlackLines-app/**/*.aab
+BlackLines-app/.idea/
+BlackLines-app/android/.gradle/
+BlackLines-app/android/local.properties
+
 # Runtime data & logs
 data/
 *.db
