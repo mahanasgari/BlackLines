@@ -5,7 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:hiddify/core/localization/translations.dart';
 import 'package:hiddify/features/blacklines/core/format.dart';
 import 'package:hiddify/features/blacklines/screens/common.dart';
-import 'package:hiddify/features/blacklines/state/controller.dart';
+import 'package:hiddify/features/blacklines/screens/config_picker.dart';
 import 'package:hiddify/features/blacklines/ui/kit.dart';
 import 'package:hiddify/features/blacklines/ui/tokens.dart';
 import 'package:hiddify/features/connection/model/connection_failure.dart';
@@ -25,9 +25,7 @@ class ConnectScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     // Signed-in users pick from their configs; guests paste a subscription link.
-    void onPickConfig() => ref.read(blControllerProvider).auth == AuthPhase.guest
-        ? openAddLinkSheet(context)
-        : ref.read(blControllerProvider).switchTab(BLTab.subs);
+    void onPickConfig() => openConfigPicker(context);
     final connection = ref.watch(connectionNotifierProvider);
     final profile = ref.watch(activeProfileProvider).valueOrNull;
     final requiresReconnect = ref.watch(configOptionNotifierProvider).valueOrNull == true;
@@ -94,7 +92,7 @@ class ConnectScreen extends ConsumerWidget {
           ),
         ],
         const Gap(24),
-        _ActiveConfigCard(profile: profile, onTap: onPickConfig),
+        _ActiveConfigCard(profile: profile, connected: connected, onTap: onPickConfig),
         const Gap(8),
         TgButton(
           label: 'افزودن لینک اشتراک',
@@ -273,16 +271,17 @@ class _DelayChip extends ConsumerWidget {
   }
 }
 
-class _ActiveConfigCard extends StatelessWidget {
-  const _ActiveConfigCard({required this.profile, required this.onTap});
+class _ActiveConfigCard extends ConsumerWidget {
+  const _ActiveConfigCard({required this.profile, required this.connected, required this.onTap});
 
   final ProfileEntity? profile;
+  final bool connected;
   final VoidCallback onTap;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final p = profile;
-    final sub = p is RemoteProfileEntity ? p.subInfo : null;
+    final server = connected ? ref.watch(activeProxyNotifierProvider).valueOrNull : null;
     return Panel(
       onTap: onTap,
       child: Row(
@@ -306,33 +305,26 @@ class _ActiveConfigCard extends StatelessWidget {
                 ),
                 const Gap(2),
                 Text(
-                  _subtitle(p, sub),
+                  p == null ? 'برای انتخاب کانفیگ بزنید' : profileSubtitle(p),
                   style: TextStyle(fontSize: 12, color: C.n400),
                 ),
+                if (server != null) ...[
+                  const Gap(2),
+                  Text(
+                    'سرور: ${serverLabel(server)}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: 12, color: C.n300),
+                  ),
+                ],
               ],
             ),
           ),
+          Text('تغییر', style: TextStyle(fontSize: 12, color: C.n400)),
           Icon(Icons.chevron_left_rounded, color: C.n400),
         ],
       ),
     );
-  }
-
-  String _subtitle(ProfileEntity? p, SubscriptionInfo? sub) {
-    if (p == null) return 'از «کانفیگ‌ها» یکی را انتخاب کنید';
-    if (sub == null) return 'تغییر کانفیگ';
-    if (sub.isExpired) return 'منقضی شده';
-    final parts = <String>[];
-    // Panels report "unlimited" as an absurd total (petabytes).
-    const unlimited = 1 << 49; // ~560 TB
-    if (sub.total >= unlimited) {
-      parts.add('حجم نامحدود');
-    } else if (sub.total > 0) {
-      parts.add('${bytesLabel(sub.remainingBW.clamp(0, sub.total))} باقی‌مانده');
-    }
-    final days = sub.remaining.inDays;
-    if (days < 3650) parts.add('${faNum(days)} روز');
-    return parts.isEmpty ? 'تغییر کانفیگ' : parts.join(' · ');
   }
 }
 
