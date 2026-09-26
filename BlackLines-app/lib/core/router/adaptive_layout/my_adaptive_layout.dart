@@ -79,7 +79,8 @@ class MyAdaptiveLayout extends HookConsumerWidget {
                   Expanded(child: navigationShell),
                 ],
               ),
-        bottomNavigationBar: isMobileBreakpoint
+        // BlackLines home (branch 0) draws its own navigation.
+        bottomNavigationBar: isMobileBreakpoint && navigationShell.currentIndex != 0
             ? FocusScope(
                 node: navScopeNode,
                 child: NavigationBar(
