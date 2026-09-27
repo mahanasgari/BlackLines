@@ -14,7 +14,6 @@ struct _MyApplication
 };
 
 G_DEFINE_TYPE(MyApplication, my_application, GTK_TYPE_APPLICATION)
-#define ICON_PATH "./hiddify.png"
 
 // Implements GApplication::activate.
 static void my_application_activate(GApplication *application)
@@ -30,7 +29,13 @@ static void my_application_activate(GApplication *application)
 
   GtkWindow *window =
       GTK_WINDOW(gtk_application_window_new(GTK_APPLICATION(application)));
-  gtk_window_set_icon_from_file(window, ICON_PATH, NULL);
+  // Window icon: the copy bundled next to the executable, else the icon the
+  // installed package puts in the theme (named after the application id).
+  g_autofree gchar *exe = g_file_read_link("/proc/self/exe", NULL);
+  g_autofree gchar *exe_dir = exe != NULL ? g_path_get_dirname(exe) : g_strdup(".");
+  g_autofree gchar *icon = g_build_filename(exe_dir, "data", "flutter_assets", "assets", "images", "source",
+                                            "blacklines_icon.png", NULL);
+  if (!gtk_window_set_icon_from_file(window, icon, NULL)) gtk_window_set_icon_name(window, APPLICATION_ID);
 
   // Use a header bar when running in GNOME as this is the common style used
   // by applications and is the setup most users will be using (e.g. Ubuntu

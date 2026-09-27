@@ -157,6 +157,7 @@ flutter:
     - assets/images/disconnect_norouz.PNG
     - assets/images/world_map.png
     - assets/images/blacklines_mark.png
+    - assets/images/source/blacklines_icon.png
     - assets/images/source/ic_launcher_border.png
 
   fonts:
