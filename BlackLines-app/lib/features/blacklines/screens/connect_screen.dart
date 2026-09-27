@@ -6,6 +6,7 @@ import 'package:hiddify/core/localization/translations.dart';
 import 'package:hiddify/features/blacklines/core/format.dart';
 import 'package:hiddify/features/blacklines/screens/common.dart';
 import 'package:hiddify/features/blacklines/screens/config_picker.dart';
+import 'package:hiddify/features/blacklines/screens/speed_test_sheet.dart';
 import 'package:hiddify/features/blacklines/ui/kit.dart';
 import 'package:hiddify/features/blacklines/ui/tokens.dart';
 import 'package:hiddify/features/connection/model/connection_failure.dart';
@@ -98,13 +99,30 @@ class ConnectScreen extends ConsumerWidget {
         const Gap(8),
         _ActiveConfigCard(profile: profile, connected: connected, onTap: onPickConfig),
         const Gap(8),
-        TgButton(
-          label: 'افزودن لینک اشتراک',
-          icon: Icons.add_link_rounded,
-          variant: BtnVariant.outline,
-          height: 40,
-          fontSize: 13,
-          onPressed: () => openAddLinkSheet(context),
+        Row(
+          children: [
+            Expanded(
+              child: TgButton(
+                label: 'افزودن لینک اشتراک',
+                icon: Icons.add_link_rounded,
+                variant: BtnVariant.outline,
+                height: 40,
+                fontSize: 13,
+                onPressed: () => openAddLinkSheet(context),
+              ),
+            ),
+            const Gap(8),
+            Expanded(
+              child: TgButton(
+                label: 'تست سرعت',
+                icon: Icons.speed_rounded,
+                variant: BtnVariant.outline,
+                height: 40,
+                fontSize: 13,
+                onPressed: () => openSpeedTest(context),
+              ),
+            ),
+          ],
         ),
         if (connected) ...[const Gap(12), const _TrafficCard()],
         const Gap(32),
