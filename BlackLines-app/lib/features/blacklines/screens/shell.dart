@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:hiddify/features/blacklines/core/format.dart';
+import 'package:hiddify/features/blacklines/notifier/default_profiles.dart';
 import 'package:hiddify/features/blacklines/screens/admin/admin_screen.dart';
 import 'package:hiddify/features/blacklines/screens/chat_screen.dart';
 import 'package:hiddify/features/blacklines/screens/connect_screen.dart';
@@ -25,6 +26,8 @@ class BLShell extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final c = ref.watch(blControllerProvider);
+    // Public fallback configs (Mahsa) for every install; runs once per launch.
+    ref.watch(blDefaultProfilesProvider);
     ref.listen(blControllerProvider.select((c) => c.pendingTrialSheet), (_, next) {
       if (next == null) return;
       final trial = ref.read(blControllerProvider).takeTrialSheet();
