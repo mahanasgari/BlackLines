@@ -353,7 +353,11 @@ class TgButton extends StatelessWidget {
             onTap: enabled ? onPressed : null,
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Center(child: DefaultTextStyle.merge(style: t(fontSize, w: 600, c: fg), child: content)),
+              // widthFactor 1: a non-expanding button hugs its label instead of filling the row.
+              child: Center(
+                widthFactor: expand ? null : 1,
+                child: DefaultTextStyle.merge(style: t(fontSize, w: 600, c: fg), child: content),
+              ),
             ),
           ),
         ),
