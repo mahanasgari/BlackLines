@@ -14,8 +14,11 @@ import 'package:hiddify/features/connection/notifier/connection_notifier.dart';
 import 'package:hiddify/features/profile/model/profile_entity.dart';
 import 'package:hiddify/features/profile/notifier/active_profile_notifier.dart';
 import 'package:hiddify/features/proxy/active/active_proxy_notifier.dart';
+import 'package:hiddify/features/settings/data/config_option_repository.dart';
 import 'package:hiddify/features/settings/notifier/config_option/config_option_notifier.dart';
 import 'package:hiddify/features/stats/notifier/stats_notifier.dart';
+import 'package:hiddify/singbox/model/singbox_config_enum.dart';
+import 'package:hiddify/utils/platform_utils.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
 /// Native connect screen: our UI, Hiddify engine underneath.
@@ -92,6 +95,8 @@ class ConnectScreen extends ConsumerWidget {
           ),
         ],
         const Gap(24),
+        const _ModeSelector(),
+        const Gap(8),
         _ActiveConfigCard(profile: profile, connected: connected, onTap: onPickConfig),
         const Gap(8),
         TgButton(
@@ -435,5 +440,80 @@ class _AddLinkState extends ConsumerState<_AddLink> {
         ),
       ],
     );
+  }
+}
+
+/// VPN (TUN) or proxy: how the engine carries traffic on this device.
+class _ModeSelector extends ConsumerWidget {
+  const _ModeSelector();
+
+  static String _label(ServiceMode m) => switch (m) {
+        ServiceMode.tun => 'VPN (تونل)',
+        ServiceMode.systemProxy => 'پراکسی سیستم',
+        ServiceMode.proxy => 'فقط پراکسی',
+      };
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final mode = ref.watch(ConfigOptions.serviceMode);
+    final port = ref.watch(ConfigOptions.mixedPort);
+    final modes = [ServiceMode.tun, ServiceMode.systemProxy, ServiceMode.proxy].where(ServiceMode.choices.contains);
+    final note = switch (mode) {
+      ServiceMode.tun => PlatformUtils.isDesktop
+          ? 'همه ترافیک سیستم از VPN عبور می‌کند. روی ویندوز برنامه را با «Run as administrator» و روی لینوکس با sudo اجرا کنید.'
+          : 'همه برنامه‌ها از VPN عبور می‌کنند.',
+      ServiceMode.systemProxy => 'مرورگر و برنامه‌هایی که از پراکسی سیستم پیروی می‌کنند وصل می‌شوند؛ نیاز به دسترسی ادمین ندارد.',
+      ServiceMode.proxy => 'فقط پراکسی محلی روشن می‌شود و بقیه برنامه‌ها مستقیم وصل می‌شوند. آدرس زیر را به‌عنوان پراکسی HTTP یا SOCKS در برنامه دلخواه تنظیم کنید.',
+    };
+    return Panel(
+      padding: const EdgeInsets.all(12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.tune_rounded, size: 16, color: C.n400),
+              const Gap(6),
+              Text('حالت اتصال', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: C.n300)),
+            ],
+          ),
+          const Gap(10),
+          Segmented<ServiceMode>(
+            items: [for (final m in modes) (m, _label(m))],
+            value: mode,
+            onChanged: (m) => _change(ref, m),
+          ),
+          const Gap(8),
+          Text(note, style: TextStyle(fontSize: 11, color: C.n500, height: 1.6)),
+          if (mode == ServiceMode.proxy) ...[
+            const Gap(8),
+            Material(
+              color: Colors.transparent,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(10),
+                onTap: () => copyText('127.0.0.1:$port', message: 'آدرس پراکسی کپی شد'),
+                child: Ink(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(color: C.w(5), borderRadius: BorderRadius.circular(10), border: Border.all(color: C.w(12))),
+                  child: Row(
+                    children: [
+                      Icon(Icons.copy_rounded, size: 14, color: C.n400),
+                      const Spacer(),
+                      Text('127.0.0.1:$port', textDirection: TextDirection.ltr, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: C.foreground)),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  // While connected, ConfigOptionNotifier restarts the tunnel in the new mode.
+  Future<void> _change(WidgetRef ref, ServiceMode m) async {
+    if (m == ref.read(ConfigOptions.serviceMode)) return;
+    await ref.read(ConfigOptions.serviceMode.notifier).update(m);
   }
 }
