@@ -483,10 +483,11 @@ class Segmented<T> extends StatelessWidget {
                     height: 32,
                     alignment: Alignment.center,
                     decoration: BoxDecoration(
-                      color: id == value ? Colors.white : Colors.transparent,
+                      // Theme primary: white on dark, near-black on light.
+                      color: id == value ? C.primary : Colors.transparent,
                       borderRadius: BorderRadius.circular(8),
                     ),
-                    child: Text(label, style: t(11, w: 600, c: id == value ? Colors.black : C.n400)),
+                    child: Text(label, style: t(11, w: 600, c: id == value ? C.primaryFg : C.n400)),
                   ),
                 ),
               ),
