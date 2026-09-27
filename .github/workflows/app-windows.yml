@@ -1,0 +1,64 @@
+# Builds the BlackLines desktop app for Windows (Flutter can't cross-compile
+# Windows from Linux). Download the zip from the run's "Artifacts" section.
+name: Windows app
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [feat/native-app]
+    paths:
+      - "BlackLines-app/**"
+      - ".github/workflows/app-windows.yml"
+
+concurrency:
+  group: app-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: BlackLines-app
+        shell: bash
+    env:
+      # pubspec.lock is resolved against this mirror; any other host makes pub
+      # re-resolve and pull newer, incompatible build tooling.
+      PUB_HOSTED_URL: https://pub.flutter-io.cn
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.38.5"
+          channel: stable
+          cache: true
+
+      - name: Get packages and generate code
+        run: |
+          flutter pub get --enforce-lockfile
+          dart run build_runner build --delete-conflicting-outputs
+          dart run slang
+
+      # Same engine release as Android and Linux (core.version in dependencies.properties).
+      - name: Download hiddify-core for Windows
+        run: |
+          version=$(sed -n 's/^core.version=//p' dependencies.properties)
+          mkdir -p hiddify-core/bin
+          curl -fL "https://github.com/hiddify/hiddify-core/releases/download/v${version}/hiddify-lib-windows-amd64.tar.gz" \
+            | tar xz -C hiddify-core/bin
+          ls -la hiddify-core/bin
+
+      - name: Build
+        run: flutter build windows --release
+
+      - name: Package portable zip
+        shell: pwsh
+        run: Compress-Archive -Path build/windows/x64/runner/Release/* -DestinationPath BlackLines-Windows-x64.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BlackLines-Windows-x64
+          path: BlackLines-app/BlackLines-Windows-x64.zip
+          retention-days: 14
