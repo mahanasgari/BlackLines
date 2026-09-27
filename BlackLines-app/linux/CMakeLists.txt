@@ -42,6 +42,10 @@ endif()
 function(APPLY_STANDARD_SETTINGS TARGET)
   target_compile_features(${TARGET} PUBLIC cxx_std_17)
   target_compile_options(${TARGET} PRIVATE -Wall -Werror)
+  # Newer clang (21+) flags deprecated APIs in plugin sources we don't own
+  # (tray_manager's app_indicator_new, the json.hpp bundled by
+  # flutter_secure_storage); keep them as warnings instead of failing the build.
+  target_compile_options(${TARGET} PRIVATE -Wno-error=deprecated-declarations -Wno-error=deprecated-literal-operator)
   target_compile_options(${TARGET} PRIVATE "$<$<NOT:$<CONFIG:Debug>>:-O3>")
   target_compile_definitions(${TARGET} PRIVATE "$<$<NOT:$<CONFIG:Debug>>:NDEBUG>")
 endfunction()
