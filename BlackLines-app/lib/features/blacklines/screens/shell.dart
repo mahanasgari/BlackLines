@@ -48,7 +48,12 @@ class BLShell extends ConsumerWidget {
             body: Stack(
               key: ValueKey(C.light),
               children: [
-                GradientField(child: _body(context, c)),
+                GradientField(
+                  // Phone-first layout: keep it phone-width on wide desktop windows.
+                  child: Center(
+                    child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 640), child: _body(context, c)),
+                  ),
+                ),
                 const Positioned(top: 0, left: 0, right: 0, child: ToastHost()),
               ],
             ),
