@@ -83,8 +83,10 @@ abstract class Preferences {
 
   static final disableMemoryLimit = PreferencesNotifier.create<bool, bool>(
     "disable_memory_limit",
-    // disable memory limit on desktop by default
-    PlatformUtils.isDesktop,
+    // The engine's memory cap exists for iOS network extensions (~50 MB hard
+    // limit). On Android it starved busy sessions ("out of memory" on new
+    // connections, Telegram stuck on "Connecting"), so only iOS keeps it.
+    !PlatformUtils.isIOS,
   );
 
   static final perAppProxyMode = PreferencesNotifier.create<PerAppProxyMode, String>(

@@ -333,7 +333,7 @@ class _Header extends StatelessWidget {
                                         style: t(10, c: C.n500),
                                       ),
                                       Text(
-                                        balance < 0 ? '${faNum(balance.abs())} تومان بدهی' : '${faNum(balance)} تومان',
+                                        balance < 0 ? '${faNum(balance.abs())} تومان' : '${faNum(balance)} تومان',
                                         overflow: TextOverflow.ellipsis,
                                         style: t(13, w: 600, c: balance < 0 ? C.rose300 : null, h: 1.2),
                                       ),
@@ -347,7 +347,10 @@ class _Header extends StatelessWidget {
                       ),
                     ),
                   ),
-                  Image.asset(kBrandMark, height: 32, color: C.light ? C.foreground : null),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    child: Image.asset(kBrandMark, height: 32, color: C.light ? C.foreground : null),
+                  ),
                   Expanded(
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.end,
