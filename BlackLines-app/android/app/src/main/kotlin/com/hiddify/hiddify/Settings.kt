@@ -72,7 +72,8 @@ object Settings {
         set(value) = preferences.edit().putBoolean(SettingsKey.DEBUG_MODE, value).apply()
 
     var disableMemoryLimit: Boolean
-        get() = preferences.getBoolean(SettingsKey.DISABLE_MEMORY_LIMIT, false)
+        // Off by default: the cap starved busy sessions on Android (matches the Dart default).
+        get() = preferences.getBoolean(SettingsKey.DISABLE_MEMORY_LIMIT, true)
         set(value) =
             preferences.edit().putBoolean(SettingsKey.DISABLE_MEMORY_LIMIT, value).apply()
 
