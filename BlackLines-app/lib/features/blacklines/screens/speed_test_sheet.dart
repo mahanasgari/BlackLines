@@ -7,6 +7,7 @@ import 'package:hiddify/features/connection/model/connection_status.dart';
 import 'package:hiddify/features/connection/notifier/connection_notifier.dart';
 import 'package:hiddify/features/settings/data/config_option_repository.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// Speed test with and without the VPN, side by side.
 Future<void> openSpeedTest(BuildContext context) => showTgSheet(
@@ -47,6 +48,28 @@ class _SpeedTestSheetState extends ConsumerState<_SpeedTestSheet> {
   final _direct = _Side();
   SpeedTest? _test;
   bool _busy = false;
+  SpeedProvider _provider = SpeedProvider.cloudflare;
+
+  static const _providerKey = 'bl_speed_provider';
+
+  @override
+  void initState() {
+    super.initState();
+    SharedPreferences.getInstance().then((p) {
+      final saved = SpeedProvider.values.where((v) => v.name == p.getString(_providerKey)).firstOrNull;
+      if (saved != null && mounted) setState(() => _provider = saved);
+    }).catchError((_) {});
+  }
+
+  void _setProvider(SpeedProvider p) {
+    if (_busy || p == _provider) return;
+    setState(() {
+      _provider = p;
+      _vpn.reset();
+      _direct.reset();
+    });
+    SharedPreferences.getInstance().then((prefs) => prefs.setString(_providerKey, p.name)).catchError((_) => false);
+  }
 
   bool get _connected => ref.read(connectionNotifierProvider).valueOrNull is Connected;
 
@@ -59,7 +82,7 @@ class _SpeedTestSheetState extends ConsumerState<_SpeedTestSheet> {
   Future<void> _run({required bool viaVpn}) async {
     final side = viaVpn ? _vpn : _direct;
     // Through the engine's local mixed proxy = through the tunnel.
-    final test = _test = SpeedTest(proxyPort: viaVpn ? ref.read(ConfigOptions.mixedPort) : null);
+    final test = _test = SpeedTest(_provider, proxyPort: viaVpn ? ref.read(ConfigOptions.mixedPort) : null);
     setState(() {
       _busy = true;
       side
@@ -67,7 +90,7 @@ class _SpeedTestSheetState extends ConsumerState<_SpeedTestSheet> {
         ..phase = _Phase.ping;
     });
     try {
-      final ping = await test.locate();
+      final ping = await test.ping();
       if (!mounted) return;
       setState(() => side
         ..ping = ping
@@ -101,9 +124,16 @@ class _SpeedTestSheetState extends ConsumerState<_SpeedTestSheet> {
   @override
   Widget build(BuildContext context) {
     final connected = ref.watch(connectionNotifierProvider).valueOrNull is Connected;
+    final mlab = _provider == SpeedProvider.mlab;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        Segmented<SpeedProvider>(
+          items: const [(SpeedProvider.cloudflare, 'Cloudflare'), (SpeedProvider.mlab, 'M-Lab')],
+          value: _provider,
+          onChanged: _setProvider,
+        ),
+        const Gap(10),
         Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -127,13 +157,19 @@ class _SpeedTestSheetState extends ConsumerState<_SpeedTestSheet> {
           onPressed: _busy ? null : _runBoth,
         ),
         const Gap(6),
-        Text('سرور تست: نزدیک‌ترین سرور M-Lab · هر مرحله حداکثر ۱۰ ثانیه', textAlign: TextAlign.center, style: t(10, c: C.n500)),
-        const Gap(2),
         Text(
-          'M-Lab نتایج همه تست‌ها، از جمله آدرس IP، را به‌صورت عمومی منتشر می‌کند.',
+          mlab ? 'نزدیک‌ترین سرور M-Lab · هر مرحله حداکثر ۱۰ ثانیه' : 'سرور Cloudflare · هر مرحله حداکثر ۷ ثانیه',
           textAlign: TextAlign.center,
-          style: t(10, c: C.n500, h: 1.5),
+          style: t(10, c: C.n500),
         ),
+        if (mlab) ...[
+          const Gap(2),
+          Text(
+            'M-Lab نتایج همه تست‌ها، از جمله آدرس IP، را به‌صورت عمومی منتشر می‌کند.',
+            textAlign: TextAlign.center,
+            style: t(10, c: C.n500, h: 1.5),
+          ),
+        ],
       ],
     );
   }

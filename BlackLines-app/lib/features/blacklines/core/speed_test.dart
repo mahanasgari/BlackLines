@@ -3,6 +3,162 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+/// Where the speed test runs.
+enum SpeedProvider { cloudflare, mlab }
+
+/// Ping, download and upload through the VPN or directly.
+///
+/// `proxyPort` routes the test through the engine's local mixed proxy (i.e.
+/// through the VPN); null tests the direct connection. The app's own traffic
+/// bypasses the tunnel, so the direct test measures the plain network even
+/// while connected.
+abstract class SpeedTest {
+  factory SpeedTest(SpeedProvider provider, {int? proxyPort}) => switch (provider) {
+        SpeedProvider.cloudflare => CloudflareSpeedTest(proxyPort: proxyPort),
+        SpeedProvider.mlab => MLabSpeedTest(proxyPort: proxyPort),
+      };
+
+  /// Server the test ran against, once known.
+  String? get serverLabel;
+
+  /// Round-trip time in ms; for M-Lab this also picks the server.
+  Future<int> ping();
+
+  Future<double> download(void Function(double mbps) onProgress);
+
+  Future<double> upload(void Function(double mbps) onProgress);
+
+  void cancel();
+}
+
+/// Latency, download and upload against Cloudflare's speed-test endpoints.
+/// Nothing is published about the test.
+///
+/// [proxyPort] routes the test through the engine's local mixed proxy (i.e.
+/// through the VPN); null tests the direct connection. The app's own traffic
+/// bypasses the tunnel, so the direct test measures the plain network even
+/// while connected.
+class CloudflareSpeedTest implements SpeedTest {
+  CloudflareSpeedTest({this.proxyPort});
+
+  final int? proxyPort;
+
+  @override
+  String? get serverLabel => 'Cloudflare';
+
+  static const _host = 'speed.cloudflare.com';
+  static const _phaseLimit = Duration(seconds: 7);
+
+  HttpClient? _client;
+  bool _cancelled = false;
+
+  @override
+  void cancel() {
+    _cancelled = true;
+    _client?.close(force: true);
+  }
+
+  HttpClient _newClient() {
+    final c = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 8)
+      ..idleTimeout = const Duration(seconds: 15);
+    final port = proxyPort;
+    c.findProxy = (_) => port == null ? 'DIRECT' : 'PROXY 127.0.0.1:$port';
+    return _client = c;
+  }
+
+  /// Round-trip time of a tiny request on a warm connection, in ms.
+  @override
+  Future<int> ping() async {
+    final c = _newClient();
+    try {
+      final times = <int>[];
+      for (var i = 0; i < 4 && !_cancelled; i++) {
+        final sw = Stopwatch()..start();
+        final req = await c.getUrl(Uri.https(_host, '/__down', {'bytes': '0'}));
+        final res = await req.close().timeout(const Duration(seconds: 8));
+        await res.drain<void>();
+        if (i > 0) times.add(sw.elapsedMilliseconds); // first one pays for TLS
+      }
+      if (times.isEmpty) throw const SocketException('cancelled');
+      times.sort();
+      return times.first;
+    } finally {
+      c.close(force: true);
+    }
+  }
+
+  /// Download speed in Mbps; [onProgress] gets the running figure.
+  ///
+  /// Cloudflare refuses downloads over 25 MB, so fast links chain requests
+  /// until the time limit.
+  @override
+  Future<double> download(void Function(double mbps) onProgress) async {
+    final c = _newClient();
+    var bytes = 0;
+    var lastReport = 0;
+    final sw = Stopwatch()..start();
+    try {
+      while (!_cancelled && sw.elapsed < _phaseLimit) {
+        final req = await c.getUrl(Uri.https(_host, '/__down', {'bytes': '25000000'}));
+        final res = await req.close().timeout(const Duration(seconds: 8));
+        if (res.statusCode != 200) throw HttpException('HTTP ${res.statusCode}');
+        await for (final data in res) {
+          bytes += data.length;
+          final ms = sw.elapsedMilliseconds;
+          if (ms - lastReport >= 250) {
+            lastReport = ms;
+            onProgress(_mbps(bytes, ms));
+          }
+          if (_cancelled || sw.elapsed >= _phaseLimit) break;
+        }
+      }
+      return _mbps(bytes, sw.elapsedMilliseconds);
+    } finally {
+      c.close(force: true);
+    }
+  }
+
+  /// Upload speed in Mbps; [onProgress] gets the running figure.
+  ///
+  /// Sends bodies that start at 256 KB and double while they finish quickly,
+  /// counting each only once the server has answered: timing socket writes
+  /// would measure the local proxy, not the network. A body that times out
+  /// ends the test with what was measured so far.
+  @override
+  Future<double> upload(void Function(double mbps) onProgress) async {
+    final c = _newClient();
+    var size = 256 * 1024;
+    var bytes = 0;
+    final sw = Stopwatch()..start();
+    try {
+      while (!_cancelled && sw.elapsed < _phaseLimit) {
+        final started = sw.elapsedMilliseconds;
+        try {
+          final req = await c.postUrl(Uri.https(_host, '/__up'));
+          req.headers.contentType = ContentType.binary;
+          req.contentLength = size;
+          req.add(Uint8List(size));
+          final res = await req.close().timeout(const Duration(seconds: 12));
+          await res.drain<void>().timeout(const Duration(seconds: 5));
+          if (res.statusCode != 200) throw HttpException('HTTP ${res.statusCode}');
+        } on TimeoutException {
+          if (bytes == 0) rethrow;
+          break;
+        }
+        bytes += size;
+        onProgress(_mbps(bytes, sw.elapsedMilliseconds));
+        if (sw.elapsedMilliseconds - started < 1500 && size < 8 * 1024 * 1024) size *= 2;
+      }
+      return _mbps(bytes, sw.elapsedMilliseconds);
+    } finally {
+      c.close(force: true);
+    }
+  }
+
+  static double _mbps(int bytes, int ms) => ms <= 0 ? 0 : bytes * 8 / (ms / 1000) / 1e6;
+}
+
 /// Speed test on Measurement Lab's NDT7 servers (the test behind Google's
 /// built-in speed test): the nearest server is chosen by M-Lab's locate API,
 /// then download and upload run over WebSockets.
@@ -13,8 +169,8 @@ import 'dart:typed_data';
 /// direct test measures the plain network even while connected.
 ///
 /// M-Lab publishes every test, including the client IP, as open data.
-class SpeedTest {
-  SpeedTest({this.proxyPort});
+class MLabSpeedTest implements SpeedTest {
+  MLabSpeedTest({this.proxyPort});
 
   final int? proxyPort;
 
@@ -30,12 +186,14 @@ class SpeedTest {
   Map<String, dynamic>? _server;
 
   /// "City, CC" of the server in use, once known.
+  @override
   String? get serverLabel {
     final loc = _server?['location'];
     if (loc is! Map) return null;
     return [loc['city'], loc['country']].whereType<String>().join(', ');
   }
 
+  @override
   void cancel() {
     _cancelled = true;
     for (final c in _clients) {
@@ -58,7 +216,8 @@ class SpeedTest {
 
   /// Finds candidate servers and returns the round-trip time (ms) of small
   /// requests to the locate service on a warm connection.
-  Future<int> locate() async {
+  @override
+  Future<int> ping() async {
     final c = _newClient();
     final times = <int>[];
     for (var i = 0; i < 3 && !_cancelled; i++) {
@@ -96,6 +255,7 @@ class SpeedTest {
   }
 
   /// Download speed in Mbps, trying the located servers in order.
+  @override
   Future<double> download(void Function(double mbps) onProgress) async {
     WebSocket? ws;
     for (final s in _servers) {
@@ -140,6 +300,7 @@ class SpeedTest {
 
   /// Upload speed in Mbps. Uses the server's own byte counts: timing socket
   /// writes would measure the local proxy, not the network.
+  @override
   Future<double> upload(void Function(double mbps) onProgress) async {
     final server = _server;
     if (server == null) throw const SocketException('no server');
