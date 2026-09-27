@@ -55,7 +55,8 @@ class MyAdaptiveLayout extends HookConsumerWidget {
     }, [isMobileBreakpoint, showProfilesAction, navigationShell.currentIndex]);
     return Material(
       child: Scaffold(
-        body: isMobileBreakpoint
+        // BlackLines home (branch 0) has its own navigation at every width.
+        body: isMobileBreakpoint || navigationShell.currentIndex == 0
             ? navigationShell
             : Row(
                 children: [
