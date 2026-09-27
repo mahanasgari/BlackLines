@@ -57,6 +57,15 @@ android {
     compileSdkVersion 36
     ndkVersion "28.2.13676358"
 
+    // Compress native libraries inside the APK (the engine alone is ~75 MB
+    // uncompressed): the arm64 download drops from ~122 MB to ~50 MB, at the
+    // cost of Android extracting them on install.
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
+
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
