@@ -8,7 +8,7 @@
 curl git unzip xz-utils zip libglu1-mesa
 
 # linux development https://docs.flutter.dev/platform-integration/linux/setup
-clang cmake ninja-build pkg-config libgtk-3-dev libstdc++-12-dev
+clang lld cmake ninja-build pkg-config libgtk-3-dev libstdc++-12-dev
 
 # build & run https://docs.flutter.dev/platform-integration/linux/building
 libgtk-3-0 libblkid1 liblzma5
@@ -21,6 +21,9 @@ locate
 
 # tray_manager https://pub.dev/packages/tray_manager
 libayatana-appindicator3-dev
+
+# flutter_secure_storage (app session token) https://pub.dev/packages/flutter_secure_storage
+libsecret-1-dev
 
 # for running .appimage
 fuse
