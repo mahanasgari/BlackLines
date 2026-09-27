@@ -76,7 +76,7 @@ class LoginScreen extends ConsumerWidget {
               ),
               const Gap(24),
               Text(
-                'موتور اتصال: Hiddify · GPLv3',
+                'متن‌باز · مجوز GPLv3',
                 textAlign: TextAlign.center,
                 style: t(11, c: C.n600),
               ),
