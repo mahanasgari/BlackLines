@@ -24,8 +24,10 @@ class _Side {
   double? up;
   _Phase? phase;
   String? error;
+  String? server;
 
   void reset() {
+    server = null;
     ping = null;
     down = null;
     up = null;
@@ -65,7 +67,7 @@ class _SpeedTestSheetState extends ConsumerState<_SpeedTestSheet> {
         ..phase = _Phase.ping;
     });
     try {
-      final ping = await test.ping();
+      final ping = await test.locate();
       if (!mounted) return;
       setState(() => side
         ..ping = ping
@@ -74,10 +76,12 @@ class _SpeedTestSheetState extends ConsumerState<_SpeedTestSheet> {
       if (!mounted) return;
       setState(() => side
         ..down = down
+        ..server = test.serverLabel
         ..phase = _Phase.upload);
       final up = await test.upload((v) => mounted ? setState(() => side.up = v) : null);
       if (mounted) setState(() => side.up = up);
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[SpeedTest] ${viaVpn ? 'vpn' : 'direct'}: $e');
       if (mounted) setState(() => side.error = side.ping == null ? 'در دسترس نیست' : 'تست کامل نشد');
     } finally {
       if (mounted) {
@@ -123,7 +127,13 @@ class _SpeedTestSheetState extends ConsumerState<_SpeedTestSheet> {
           onPressed: _busy ? null : _runBoth,
         ),
         const Gap(6),
-        Text('سرور تست: Cloudflare · هر مرحله حداکثر ۷ ثانیه', textAlign: TextAlign.center, style: t(10, c: C.n500)),
+        Text('سرور تست: نزدیک‌ترین سرور M-Lab · هر مرحله حداکثر ۱۰ ثانیه', textAlign: TextAlign.center, style: t(10, c: C.n500)),
+        const Gap(2),
+        Text(
+          'M-Lab نتایج همه تست‌ها، از جمله آدرس IP، را به‌صورت عمومی منتشر می‌کند.',
+          textAlign: TextAlign.center,
+          style: t(10, c: C.n500, h: 1.5),
+        ),
       ],
     );
   }
@@ -152,6 +162,7 @@ class _SpeedTestSheetState extends ConsumerState<_SpeedTestSheet> {
               ),
             ],
           ),
+          if (s.server != null) Text(s.server!, textDirection: TextDirection.ltr, textAlign: TextAlign.end, style: t(10, c: C.n500)),
           const Gap(6),
           _metric('پینگ', s.ping == null ? '—' : '${faNum(s.ping!)} ms', active: s.phase == _Phase.ping),
           _metric('دانلود', mbps(s.down), active: s.phase == _Phase.download),
