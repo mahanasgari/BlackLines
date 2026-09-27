@@ -102,12 +102,10 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
     private val notificationPermissionLauncher =
         registerForActivityResult(
             ActivityResultContracts.RequestPermission(),
-        ) { isGranted ->
-            if (Settings.dynamicNotification && !isGranted) {
-                onServiceAlert(Alert.RequestNotificationPermission, null)
-            } else {
-                startService0()
-            }
+        ) { _ ->
+            // The VPN works without its status notification: if the user
+            // declines, start anyway instead of refusing to connect.
+            startService0()
         }
 
     private val prepareLauncher =
@@ -154,9 +152,8 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
         grantResults: IntArray
     ) {
         if (requestCode == NOTIFICATION_PERMISSION_REQUEST_CODE) {
-            if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                startService()
-            } else onServiceAlert(Alert.RequestNotificationPermission, null)
+            // Granted or not, connect: only the status notification needs it.
+            startService0()
         }
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
     }
