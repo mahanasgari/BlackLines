@@ -75,6 +75,12 @@ sealed class CoreStatus with _$CoreStatus {
   }
 
   ConnectionFailure? getCoreAlert() {
+    // Desktop TUN without admin/root rights ("operation not permitted" on
+    // Linux, "Access is denied" on Windows).
+    if (this case CoreStopped(alert: _?, message: final message?)
+        when RegExp('operation not permitted|access is denied|permission denied', caseSensitive: false).hasMatch(message)) {
+      return const ConnectionFailure.missingPrivilege();
+    }
     return switch (this) {
       CoreStopped(alert: final alert, message: final message) when alert != null => switch (alert) {
         CoreAlert.emptyConfiguration => ConnectionFailure.invalidConfig(message),

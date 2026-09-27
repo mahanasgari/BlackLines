@@ -199,6 +199,12 @@ class HiddifyCoreService with InfraLogger {
         if (e.code == StatusCode.unavailable) {
           return left(const ConnectionFailure.unexpected("background core is not started yet!"));
         }
+        // Desktop TUN without admin/root rights: "operation not permitted" on
+        // Linux, "Access is denied" on Windows.
+        if (RegExp('operation not permitted|access is denied|permission denied', caseSensitive: false)
+            .hasMatch(e.message ?? '')) {
+          return left(const ConnectionFailure.missingPrivilege());
+        }
         // throw InvalidConfig(e.message);
         // throw DioException.connectionError(requestOptions: RequestOptions(), reason: e.codeName, error: e);
 
