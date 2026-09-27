@@ -22,6 +22,10 @@ jobs:
       run:
         working-directory: BlackLines-app
         shell: bash
+    env:
+      # pubspec.lock is resolved against this mirror; any other host makes pub
+      # re-resolve and pull newer, incompatible build tooling.
+      PUB_HOSTED_URL: https://pub.flutter-io.cn
     steps:
       - uses: actions/checkout@v4
 
@@ -33,7 +37,7 @@ jobs:
 
       - name: Get packages and generate code
         run: |
-          flutter pub get
+          flutter pub get --enforce-lockfile
           dart run build_runner build --delete-conflicting-outputs
           dart run slang
 
