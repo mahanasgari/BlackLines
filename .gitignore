@@ -40,6 +40,7 @@ BlackLines-app/android/.gradle/
 BlackLines-app/android/local.properties
 # Downloaded engine binaries (make android-libs / ios-libs)
 BlackLines-app/ios/Frameworks/
+BlackLines-app/hiddify-core/bin/
 
 # Runtime data & logs
 /data/
