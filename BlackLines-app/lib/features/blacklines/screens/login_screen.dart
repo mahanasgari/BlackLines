@@ -74,12 +74,6 @@ class LoginScreen extends ConsumerWidget {
                 textAlign: TextAlign.center,
                 style: t(11, c: C.n500, h: 1.6),
               ),
-              const Gap(24),
-              Text(
-                'متن‌باز · مجوز GPLv3',
-                textAlign: TextAlign.center,
-                style: t(11, c: C.n600),
-              ),
             ],
           ),
         ),

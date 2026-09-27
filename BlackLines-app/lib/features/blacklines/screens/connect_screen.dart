@@ -103,12 +103,6 @@ class ConnectScreen extends ConsumerWidget {
           onPressed: () => openAddLinkSheet(context),
         ),
         if (connected) ...[const Gap(12), const _TrafficCard()],
-        const Gap(32),
-        Text(
-          'متن‌باز · مجوز GPLv3',
-          textAlign: TextAlign.center,
-          style: TextStyle(fontSize: 11, color: C.n600),
-        ),
       ],
     );
   }
